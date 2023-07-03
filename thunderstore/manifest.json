@@ -1,7 +1,7 @@
 {
-  "name": "Ore_Support",
-  "version_number": "1.6.0",
-  "website_url": "https://github.com/JereKuusela/valheim-ore_support",
-  "description": "5hows supporting bounding boxes for mine rocks which makes collapsing them much easier.",
-  "dependencies": ["denikson-BepInExPack_Valheim-5.4.1901"]
+  "name": "AutoPinSigns",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com/shudnal/AutoPinSigns",
+  "description": "Create map pins based on sign's text you placed.",
+  "dependencies": ["denikson-BepInExPack_Valheim-5.4.2105"]
 }

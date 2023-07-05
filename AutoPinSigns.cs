@@ -14,53 +14,66 @@ namespace AutoPinSigns
     {
         const string pluginID = "shudnal.AutoPinSigns";
         const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.0";
+        const string pluginVersion = "1.0.1";
         public static ManualLogSource logger;
 
         private Harmony _harmony;
 
-        private static bool modEnabled;
+        private static ConfigEntry<bool> modEnabled;
+        private static ConfigEntry<string> configFireList;
+        private static ConfigEntry<string> configBaseList;
+        private static ConfigEntry<string> configHammerList;
+        private static ConfigEntry<string> configPinList;
+        private static ConfigEntry<string> configPortalList;
 
-        public static Dictionary<Vector3, string> itemsPins = new Dictionary<Vector3, string>();
-        public static Dictionary<string, bool> FireList = new Dictionary<string, bool>();
-        public static Dictionary<string, bool> BaseList = new Dictionary<string, bool>();
-        public static Dictionary<string, bool> HammerList = new Dictionary<string, bool>();
-        public static Dictionary<string, bool> PinList = new Dictionary<string, bool>();
-        public static Dictionary<string, bool> PortalList = new Dictionary<string, bool>();
+        private static Dictionary<Vector3, string> itemsPins = new Dictionary<Vector3, string>();
+        private static Dictionary<string, bool> FireList = new Dictionary<string, bool>();
+        private static Dictionary<string, bool> BaseList = new Dictionary<string, bool>();
+        private static Dictionary<string, bool> HammerList = new Dictionary<string, bool>();
+        private static Dictionary<string, bool> PinList = new Dictionary<string, bool>();
+        private static Dictionary<string, bool> PortalList = new Dictionary<string, bool>();
+
+        private static AutoPinSigns instance;
 
         private void Awake()
         {
-
-            modEnabled = Config.Bind("General", "Enabled", defaultValue: true, "Enable the mod").Value;
-
-            string section = "Signs";
-
-            string configFireList = Config.Bind(section, "FireList", "fire", "List of the case-insensitive strings to add Fire pin.  Comma-separate each string.  Default: fire").Value;
-            string configBaseList = Config.Bind(section, "BaseList", "base", "List of the case-insensitive strings to add Base pin.  Comma-separate each string.  Default: base").Value;
-            string configHammerList = Config.Bind(section, "HammerList", "hammer", "List of the strings to add Hammer pin.  Comma-separate each string.  Default: hammer").Value;
-            string configPinList = Config.Bind(section, "PinList", "pin,dot", "List of the strings to add Dot pin.  Comma-separate each string.  Default: pin,dot").Value;
-            string configPortalList = Config.Bind(section, "PortalList", "portal", "List of the strings to add Portal pin.  Comma-separate each string.  Default: portal").Value;
-
-            if (!modEnabled)
-            {
-                return;
-            }
-
-            AddToDict(configFireList, FireList);
-            AddToDict(configBaseList, BaseList);
-            AddToDict(configHammerList, HammerList);
-            AddToDict(configPinList, PinList);
-            AddToDict(configPortalList, PortalList);
+            ConfigInit();
 
             logger = Logger;
 
             _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), pluginID);
 
+            instance = this;
         }
+
         private void OnDestroy()
         {
             Config.Save();
             _harmony?.UnpatchSelf();
+        }
+
+        private void ConfigInit()
+        {
+            modEnabled = Config.Bind("General", "Enabled", defaultValue: true, "Enable the mod");
+
+            string section = "Signs";
+
+            configFireList = Config.Bind(section, "FireList", "fire", "List of the case-insensitive strings to add Fire pin.  Comma-separate each string.  Default: fire");
+            configBaseList = Config.Bind(section, "BaseList", "base", "List of the case-insensitive strings to add Base pin.  Comma-separate each string.  Default: base");
+            configHammerList = Config.Bind(section, "HammerList", "hammer", "List of the strings to add Hammer pin.  Comma-separate each string.  Default: hammer");
+            configPinList = Config.Bind(section, "PinList", "pin,dot", "List of the strings to add Dot pin.  Comma-separate each string.  Default: pin,dot");
+            configPortalList = Config.Bind(section, "PortalList", "portal", "List of the strings to add Portal pin.  Comma-separate each string.  Default: portal");
+
+            AddToDict(configFireList.Value, FireList);
+            AddToDict(configBaseList.Value, BaseList);
+            AddToDict(configHammerList.Value, HammerList);
+            AddToDict(configPinList.Value, PinList);
+            AddToDict(configPortalList.Value, PortalList);
+        }
+        private void ConfigUpdate()
+        {
+            Config.Reload();
+            ConfigInit();
         }
 
         static bool IsFireSign(string text)
@@ -107,6 +120,8 @@ namespace AutoPinSigns
 
         static void AddToDict(string text, Dictionary<string, bool> Dict)
         {
+            Dict.Clear();
+
             char[] separator = new char[1] { ',' };
             foreach (string item in text.Replace(" ", "").Split(separator, StringSplitOptions.RemoveEmptyEntries))
             {
@@ -141,6 +156,11 @@ namespace AutoPinSigns
         {
             static bool Prefix(ref Minimap __instance, List<Minimap.PinData> ___m_pins, Vector3 pos, Minimap.PinType type, string name, bool save)
             {
+                if (!modEnabled.Value)
+                {
+                    return true;
+                }
+
                 if (__instance.HaveSimilarPin(pos, type, name, save))
                     return false;
                 else
@@ -149,11 +169,29 @@ namespace AutoPinSigns
 
         }
 
+        [HarmonyPatch(typeof(Sign), nameof(Sign.Interact))]
+        public static class Sign_Interact_patch
+        {
+            static void Postfix()
+            {
+                if (modEnabled.Value)
+                {
+                    AutoPinSigns.instance.ConfigUpdate();
+                }
+            }
+        }
+
         [HarmonyPatch(typeof(Sign), nameof(Sign.UpdateText))]
         public static class Sign_UpdateText_patch
         {
             static void Postfix(ref Sign __instance)
             {
+
+                if (!modEnabled.Value)
+                {
+                    return;
+                }
+
                 string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(__instance, new object[] { });
                 string lowertext = text.ToLower();
 
@@ -201,6 +239,12 @@ namespace AutoPinSigns
         {
             static void Postfix(ref WearNTear __instance)
             {
+
+                if (!modEnabled.Value)
+                {
+                    return;
+                }
+
                 Sign component = __instance.GetComponent<Sign>();
 
                 if (component != null)

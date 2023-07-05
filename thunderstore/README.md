@@ -16,6 +16,7 @@ extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
 * if someone destroyed pinned sign when you're not there your pin will stay. Still you can build and destroy sign in that place to remove your pin form map.
 
 ## Changelog
-
+v 1.0.1
+* Readme changed
 v 1.0.0
 * Initial release

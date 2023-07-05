@@ -17,6 +17,6 @@ extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
 
 ## Changelog
 v 1.0.1
-* Readme changed
+* Added config update on sign interaction
 v 1.0.0
 * Initial release

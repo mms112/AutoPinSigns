@@ -14,7 +14,7 @@ namespace AutoPinSigns
     {
         const string pluginID = "shudnal.AutoPinSigns";
         const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.1";
+        const string pluginVersion = "1.0.2";
         public static ManualLogSource logger;
 
         private Harmony _harmony;
@@ -136,37 +136,23 @@ namespace AutoPinSigns
 
         static public bool FindAndDeleteClosestPin(Vector3 pos)
         {
-            foreach (Minimap.PinData pin in Minimap.instance.m_pins)
-            {
-                if (IsPinnableSign(pin.m_name))
+
+            if (Minimap.instance != null) 
+            { 
+                foreach (Minimap.PinData pin in Minimap.instance.m_pins)
                 {
-                    if (Utils.DistanceXZ(pos, pin.m_pos) < 2.0f)
+                    if (IsPinnableSign(pin.m_name))
                     {
-                        Minimap.instance.RemovePin(pin);
-                        return true;
+                        if (Utils.DistanceXZ(pos, pin.m_pos) < 2.0f)
+                        {
+                            Minimap.instance.RemovePin(pin);
+                            return true;
+                        }
                     }
                 }
             }
             itemsPins.Remove(pos);
             return false;
-        }
-
-        [HarmonyPatch(typeof(Minimap), nameof(Minimap.AddPin))]
-        public static class Minimap_AddPin_Patch
-        {
-            static bool Prefix(ref Minimap __instance, List<Minimap.PinData> ___m_pins, Vector3 pos, Minimap.PinType type, string name, bool save)
-            {
-                if (!modEnabled.Value)
-                {
-                    return true;
-                }
-
-                if (__instance.HaveSimilarPin(pos, type, name, save))
-                    return false;
-                else
-                    return true;
-            }
-
         }
 
         [HarmonyPatch(typeof(Sign), nameof(Sign.Interact))]
@@ -187,10 +173,8 @@ namespace AutoPinSigns
             static void Postfix(ref Sign __instance)
             {
 
-                if (!modEnabled.Value)
-                {
+                if (!modEnabled.Value || __instance == null || Minimap.instance == null)
                     return;
-                }
 
                 string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(__instance, new object[] { });
                 string lowertext = text.ToLower();
@@ -215,11 +199,12 @@ namespace AutoPinSigns
                 }
 
                 if (!IsPinnableSign(lowertext))
-                {
                     return;
-                }
 
                 Minimap.PinType icon = GetIcon(lowertext);
+
+                if (Minimap.instance.HaveSimilarPin(pos, icon, lowertext, true))
+                    return;
 
                 Minimap.instance.AddPin(pos, icon, lowertext, true, false, 0L);
                 itemsPins.Add(pos, lowertext);
@@ -235,18 +220,21 @@ namespace AutoPinSigns
         }
 
         [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.Destroy))]
-        public static class WearNTear_OnDestroy_patch
+        public static class WearNTear_Destroy_patch
         {
-            static void Postfix(ref WearNTear __instance)
+            static bool Prefix(ref WearNTear __instance)
             {
 
-                if (!modEnabled.Value)
+                if (!modEnabled.Value || __instance == null)
+                    return true;
+
+                ZNetView m_nview = (ZNetView)AccessTools.Field(typeof(WearNTear), "m_nview").GetValue(__instance);
+                if (m_nview == null || !m_nview.IsValid() || !m_nview.IsOwner() || Game.instance == null)
                 {
-                    return;
+                    return true;
                 }
-
+                
                 Sign component = __instance.GetComponent<Sign>();
-
                 if (component != null)
                 {
                     string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(component, new object[] { });
@@ -262,6 +250,7 @@ namespace AutoPinSigns
                     }
                 }
 
+                return true;
 
             }
 

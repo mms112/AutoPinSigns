@@ -13,10 +13,15 @@ extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
 * Automatically adds new pin on close proximity with the sign (when it is loaded)
 
 ## Known issues
-* if someone destroyed pinned sign when you're not there your pin will stay. Still you can build and destroy sign in that place to remove your pin form map.
+* if someone destroyed pinned sign when you're not there your pin will stay. Still you can build and destroy sign in that place to remove your pin from map.
 
 ## Changelog
+
+v 1.0.2
+* Added some protection from potential issues
+
 v 1.0.1
 * Added config update on sign interaction
+
 v 1.0.0
 * Initial release

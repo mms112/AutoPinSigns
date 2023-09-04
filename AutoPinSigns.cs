@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Logging;
@@ -14,7 +16,7 @@ namespace AutoPinSigns
     {
         const string pluginID = "shudnal.AutoPinSigns";
         const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.2";
+        const string pluginVersion = "1.0.3";
         public static ManualLogSource logger;
 
         private Harmony _harmony;
@@ -129,29 +131,26 @@ namespace AutoPinSigns
             }
         }
 
-        static public void DeleteClosestPins(Vector3 pos)
+        static public void DeleteClosestPins(Vector3 pos, float distance = 5.0f)
         {
-            while (FindAndDeleteClosestPin(pos)) { };
+            while (FindAndDeleteClosestPin(pos, distance)) { };
+
+            itemsPins = itemsPins.Where(pin_pos => Utils.DistanceXZ(pos, pin_pos.Key) >= distance).ToDictionary(kv => kv.Key, kv => kv.Value);
         }
 
-        static public bool FindAndDeleteClosestPin(Vector3 pos)
+        static public bool FindAndDeleteClosestPin(Vector3 pos, float distance = 5.0f)
         {
-
-            if (Minimap.instance != null) 
-            { 
+            if (Minimap.instance != null)
+            {
                 foreach (Minimap.PinData pin in Minimap.instance.m_pins)
                 {
-                    if (IsPinnableSign(pin.m_name))
+                    if (Utils.DistanceXZ(pos, pin.m_pos) < distance)
                     {
-                        if (Utils.DistanceXZ(pos, pin.m_pos) < 2.0f)
-                        {
-                            Minimap.instance.RemovePin(pin);
-                            return true;
-                        }
+                        Minimap.instance.RemovePin(pin);
+                        return true;
                     }
                 }
             }
-            itemsPins.Remove(pos);
             return false;
         }
 
@@ -162,7 +161,7 @@ namespace AutoPinSigns
             {
                 if (modEnabled.Value)
                 {
-                    AutoPinSigns.instance.ConfigUpdate();
+                    instance.ConfigUpdate();
                 }
             }
         }
@@ -177,7 +176,7 @@ namespace AutoPinSigns
                     return;
 
                 string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(__instance, new object[] { });
-                string lowertext = text.ToLower();
+                string lowertext = Regex.Replace(text.ToLower(), @"<(.|\n)*?>", "");
 
                 Vector3 pos = __instance.transform.position;
 
@@ -213,7 +212,7 @@ namespace AutoPinSigns
 
                 if (Player.m_localPlayer != null)
                 {
-                    Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + text, 0, m_icon_sprite);
+                    Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + lowertext, 0, m_icon_sprite);
                 }
 
             }
@@ -222,18 +221,15 @@ namespace AutoPinSigns
         [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.Destroy))]
         public static class WearNTear_Destroy_patch
         {
-            static bool Prefix(ref WearNTear __instance)
+            static void Prefix(ref WearNTear __instance, ZNetView ___m_nview)
             {
 
                 if (!modEnabled.Value || __instance == null)
-                    return true;
+                    return;
 
-                ZNetView m_nview = (ZNetView)AccessTools.Field(typeof(WearNTear), "m_nview").GetValue(__instance);
-                if (m_nview == null || !m_nview.IsValid() || !m_nview.IsOwner() || Game.instance == null)
-                {
-                    return true;
-                }
-                
+                if (___m_nview == null || !___m_nview.IsOwner() || Game.instance == null)
+                    return;
+
                 Sign component = __instance.GetComponent<Sign>();
                 if (component != null)
                 {
@@ -249,11 +245,35 @@ namespace AutoPinSigns
                         }
                     }
                 }
+            }
+        }
+
+        [HarmonyPatch(typeof(Terminal), nameof(Terminal.InputText))]
+        public static class Terminal_InputText_Commands
+        {
+            static bool Prefix(Terminal __instance)
+            {
+                if (!modEnabled.Value)
+                    return true;
+
+                string text = __instance.m_input.text;
+                if (text.ToLower().StartsWith($"{typeof(AutoPinSigns).Namespace.ToLower()} clear"))
+                {
+                    if (Player.m_localPlayer == null)
+                        return true;
+
+                    var t = text.Split(' ');
+                    if (t.Length > 2 && float.TryParse(t[t.Length - 1], out float j) && j > 0f)
+                        DeleteClosestPins(Player.m_localPlayer.transform.position, j);
+                    else
+                        DeleteClosestPins(Player.m_localPlayer.transform.position);
+
+                    return false;
+                }
 
                 return true;
 
             }
-
         }
     }
-}
+ }

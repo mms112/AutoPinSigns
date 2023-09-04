@@ -11,11 +11,18 @@ extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
 * Configurable strings filter for 5 map pins (fire,base,hammer,dot,portal)
 * Deletes a pin on text change or sign destroying
 * Automatically adds new pin on close proximity with the sign (when it is loaded)
+* Support of html flavored signs like "<color="red">pin"
+* Console command "autopinsigns clear 5" will erase all pins from map in that radius around player
 
 ## Known issues
 * if someone destroyed pinned sign when you're not there your pin will stay. Still you can build and destroy sign in that place to remove your pin from map.
 
 ## Changelog
+
+v 1.0.3
+* improved stability
+* support of signs with html tags
+* console command to clear nearest pins
 
 v 1.0.2
 * Added some protection from potential issues

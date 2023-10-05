@@ -17,7 +17,17 @@ extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
 ## Known issues
 * if someone destroyed pinned sign when you're not there your pin will stay. Still you can build and destroy sign in that place to remove your pin from map.
 
+## Configurating
+The best way to handle configs is configuration manager. Choose one that works for you:
+
+https://www.nexusmods.com/site/mods/529
+
+https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationManager/
+
 ## Changelog
+
+v 1.0.4
+* patch 0.217.22
 
 v 1.0.3
 * improved stability

@@ -16,7 +16,7 @@ namespace AutoPinSigns
     {
         const string pluginID = "shudnal.AutoPinSigns";
         const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.3";
+        const string pluginVersion = "1.0.4";
         public static ManualLogSource logger;
 
         private Harmony _harmony;

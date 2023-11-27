@@ -26,6 +26,9 @@ https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationMa
 
 ## Changelog
 
+v 1.0.5
+* option to less strict strings comparison
+
 v 1.0.4
 * patch 0.217.22
 

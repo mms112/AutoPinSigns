@@ -16,12 +16,15 @@ namespace AutoPinSigns
     {
         const string pluginID = "shudnal.AutoPinSigns";
         const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.4";
+        const string pluginVersion = "1.0.5";
+        
         public static ManualLogSource logger;
 
         private Harmony _harmony;
 
         private static ConfigEntry<bool> modEnabled;
+        private static ConfigEntry<bool> allowSubstrings;
+
         private static ConfigEntry<string> configFireList;
         private static ConfigEntry<string> configBaseList;
         private static ConfigEntry<string> configHammerList;
@@ -29,11 +32,11 @@ namespace AutoPinSigns
         private static ConfigEntry<string> configPortalList;
 
         private static Dictionary<Vector3, string> itemsPins = new Dictionary<Vector3, string>();
-        private static Dictionary<string, bool> FireList = new Dictionary<string, bool>();
-        private static Dictionary<string, bool> BaseList = new Dictionary<string, bool>();
-        private static Dictionary<string, bool> HammerList = new Dictionary<string, bool>();
-        private static Dictionary<string, bool> PinList = new Dictionary<string, bool>();
-        private static Dictionary<string, bool> PortalList = new Dictionary<string, bool>();
+        private static readonly HashSet<string> fireList = new HashSet<string>();
+        private static readonly HashSet<string> baseList = new HashSet<string>();
+        private static readonly HashSet<string> hammerList = new HashSet<string>();
+        private static readonly HashSet<string> pinList = new HashSet<string>();
+        private static readonly HashSet<string> portalList = new HashSet<string>();
 
         private static AutoPinSigns instance;
 
@@ -57,20 +60,19 @@ namespace AutoPinSigns
         private void ConfigInit()
         {
             modEnabled = Config.Bind("General", "Enabled", defaultValue: true, "Enable the mod");
+            allowSubstrings = Config.Bind("General", "Less strict string comparison", defaultValue: false, "Less strict comparison of config substrings. Enable to create pins if sign have any substring instead of exact match");
 
-            string section = "Signs";
+            configFireList = Config.Bind("Signs", "FireList", defaultValue: "fire", "List of the case-insensitive strings to add Fire pin.  Comma-separate each string.  Default: fire");
+            configBaseList = Config.Bind("Signs", "BaseList", defaultValue: "base", "List of the case-insensitive strings to add Base pin.  Comma-separate each string.  Default: base");
+            configHammerList = Config.Bind("Signs", "HammerList", defaultValue: "hammer", "List of the strings to add Hammer pin.  Comma-separate each string.  Default: hammer");
+            configPinList = Config.Bind("Signs", "PinList", defaultValue: "pin,dot", "List of the strings to add Dot pin.  Comma-separate each string.  Default: pin,dot");
+            configPortalList = Config.Bind("Signs", "PortalList", defaultValue: "portal", "List of the strings to add Portal pin.  Comma-separate each string.  Default: portal");
 
-            configFireList = Config.Bind(section, "FireList", "fire", "List of the case-insensitive strings to add Fire pin.  Comma-separate each string.  Default: fire");
-            configBaseList = Config.Bind(section, "BaseList", "base", "List of the case-insensitive strings to add Base pin.  Comma-separate each string.  Default: base");
-            configHammerList = Config.Bind(section, "HammerList", "hammer", "List of the strings to add Hammer pin.  Comma-separate each string.  Default: hammer");
-            configPinList = Config.Bind(section, "PinList", "pin,dot", "List of the strings to add Dot pin.  Comma-separate each string.  Default: pin,dot");
-            configPortalList = Config.Bind(section, "PortalList", "portal", "List of the strings to add Portal pin.  Comma-separate each string.  Default: portal");
-
-            AddToDict(configFireList.Value, FireList);
-            AddToDict(configBaseList.Value, BaseList);
-            AddToDict(configHammerList.Value, HammerList);
-            AddToDict(configPinList.Value, PinList);
-            AddToDict(configPortalList.Value, PortalList);
+            AddToHS(configFireList.Value, fireList);
+            AddToHS(configBaseList.Value, baseList);
+            AddToHS(configHammerList.Value, hammerList);
+            AddToHS(configPinList.Value, pinList);
+            AddToHS(configPortalList.Value, portalList);
         }
         private void ConfigUpdate()
         {
@@ -78,25 +80,33 @@ namespace AutoPinSigns
             ConfigInit();
         }
 
+        private static bool IsSign(HashSet<string> list, string text)
+        {
+            if (allowSubstrings.Value)
+                return list.Any(x => text.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+            else
+                return list.Contains(text);
+        }
+
         static bool IsFireSign(string text)
         {
-            return FireList.ContainsKey(text);
+            return IsSign(fireList, text);
         }
         static bool IsBaseSign(string text)
         {
-            return BaseList.ContainsKey(text);
+            return IsSign(baseList, text);
         }
         static bool IsHammerSign(string text)
         {
-            return HammerList.ContainsKey(text);
+            return IsSign(hammerList, text);
         }
         static bool IsPinSign(string text)
         {
-            return PinList.ContainsKey(text);
+            return IsSign(pinList, text);
         }
         static bool IsPortalSign(string text)
         {
-            return PortalList.ContainsKey(text);
+            return IsSign(portalList, text);
         }
 
         static bool IsPinnableSign(string text)
@@ -120,14 +130,14 @@ namespace AutoPinSigns
             return Minimap.PinType.Icon3;
         }
 
-        static void AddToDict(string text, Dictionary<string, bool> Dict)
+        static void AddToHS(string text, HashSet<string> HS)
         {
-            Dict.Clear();
+            HS.Clear();
 
             char[] separator = new char[1] { ',' };
             foreach (string item in text.Replace(" ", "").Split(separator, StringSplitOptions.RemoveEmptyEntries))
             {
-                Dict.Add(item, true);
+                HS.Add(item);
             }
         }
 
@@ -160,9 +170,7 @@ namespace AutoPinSigns
             static void Postfix()
             {
                 if (modEnabled.Value)
-                {
                     instance.ConfigUpdate();
-                }
             }
         }
 
@@ -171,8 +179,10 @@ namespace AutoPinSigns
         {
             static void Postfix(ref Sign __instance)
             {
+                if (!modEnabled.Value)
+                    return;
 
-                if (!modEnabled.Value || __instance == null || Minimap.instance == null)
+                if (Minimap.instance == null)
                     return;
 
                 string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(__instance, new object[] { });
@@ -211,9 +221,7 @@ namespace AutoPinSigns
                 Sprite m_icon_sprite = Minimap.instance.GetSprite(icon);
 
                 if (Player.m_localPlayer != null)
-                {
                     Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + lowertext, 0, m_icon_sprite);
-                }
 
             }
         }
@@ -223,20 +231,19 @@ namespace AutoPinSigns
         {
             static void Prefix(ref WearNTear __instance, ZNetView ___m_nview)
             {
-
-                if (!modEnabled.Value || __instance == null)
+                if (!modEnabled.Value)
                     return;
 
-                if (___m_nview == null || !___m_nview.IsOwner() || Game.instance == null)
+                if (___m_nview == null)
                     return;
 
-                Sign component = __instance.GetComponent<Sign>();
-                if (component != null)
+                if (!___m_nview.IsValid())
+                    return;
+
+                if (__instance.TryGetComponent<Sign>(out Sign component))
                 {
                     string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(component, new object[] { });
-                    text = text.ToLower();
-
-                    if (IsPinnableSign(text))
+                    if (IsPinnableSign(text.ToLower()))
                     {
                         Vector3 pos = __instance.transform.position;
                         if (itemsPins.ContainsKey(pos))

@@ -364,3 +364,4 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /thunderstore/AutoPinSigns.zip
+/package/thunderstore/AutoPinSigns.zip

@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Reflection;
 using BepInEx;
-using BepInEx.Logging;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
@@ -16,10 +15,8 @@ namespace AutoPinSigns
     {
         const string pluginID = "shudnal.AutoPinSigns";
         const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.5";
+        const string pluginVersion = "1.0.6";
         
-        public static ManualLogSource logger;
-
         private Harmony _harmony;
 
         private static ConfigEntry<bool> modEnabled;
@@ -43,8 +40,6 @@ namespace AutoPinSigns
         private void Awake()
         {
             ConfigInit();
-
-            logger = Logger;
 
             _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), pluginID);
 
@@ -73,11 +68,36 @@ namespace AutoPinSigns
             AddToHS(configHammerList.Value, hammerList);
             AddToHS(configPinList.Value, pinList);
             AddToHS(configPortalList.Value, portalList);
+
+            InitCommands();
         }
-        private void ConfigUpdate()
+
+        public static void InitCommands()
         {
-            Config.Reload();
-            ConfigInit();
+            new Terminal.ConsoleCommand($"{typeof(AutoPinSigns).Namespace.ToLower()}", "[action]", delegate (Terminal.ConsoleEventArgs args)
+            {
+                if (!modEnabled.Value)
+                {
+                    args.Context.AddString("Mod disabled");
+                    return;
+                }
+
+                if (!Player.m_localPlayer)
+                    return;
+
+                if (args.Args.Length >= 2 && args.Args[1] == "clear")
+                {
+                    if (args.Args.Length > 2 && float.TryParse(args.Args[2], out float j))
+                        DeleteClosestPins(Player.m_localPlayer.transform.position, j);
+                    else
+                        DeleteClosestPins(Player.m_localPlayer.transform.position);
+                }
+                else
+                {
+                    args.Context.AddString($"Syntax: {typeof(AutoPinSigns).Namespace.ToLower()} [action]");
+                }
+
+            }, isCheat: false, isNetwork: false, onlyServer: false, isSecret: false, allowInDevBuild: false, () => new List<string>() { "clear [range] -  Clear closest to current player pins in set range. Default 5" }, alwaysRefreshTabOptions: true, remoteCommand: false);
         }
 
         private static bool IsSign(HashSet<string> list, string text)
@@ -150,7 +170,7 @@ namespace AutoPinSigns
 
         static public bool FindAndDeleteClosestPin(Vector3 pos, float distance = 5.0f)
         {
-            if (Minimap.instance != null)
+            if (Minimap.instance)
             {
                 foreach (Minimap.PinData pin in Minimap.instance.m_pins)
                 {
@@ -161,32 +181,22 @@ namespace AutoPinSigns
                     }
                 }
             }
-            return false;
-        }
 
-        [HarmonyPatch(typeof(Sign), nameof(Sign.Interact))]
-        public static class Sign_Interact_patch
-        {
-            static void Postfix()
-            {
-                if (modEnabled.Value)
-                    instance.ConfigUpdate();
-            }
+            return false;
         }
 
         [HarmonyPatch(typeof(Sign), nameof(Sign.UpdateText))]
         public static class Sign_UpdateText_patch
         {
-            static void Postfix(ref Sign __instance)
+            static void Postfix(Sign __instance)
             {
                 if (!modEnabled.Value)
                     return;
 
-                if (Minimap.instance == null)
+                if (!Minimap.instance)
                     return;
 
-                string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(__instance, new object[] { });
-                string lowertext = Regex.Replace(text.ToLower(), @"<(.|\n)*?>", "");
+                string lowertext = Regex.Replace(__instance.GetText().ToLower(), @"<(.|\n)*?>", "");
 
                 Vector3 pos = __instance.transform.position;
 
@@ -220,9 +230,7 @@ namespace AutoPinSigns
 
                 Sprite m_icon_sprite = Minimap.instance.GetSprite(icon);
 
-                if (Player.m_localPlayer != null)
-                    Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + lowertext, 0, m_icon_sprite);
-
+                Player.m_localPlayer?.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + lowertext, 0, m_icon_sprite);
             }
         }
 
@@ -234,52 +242,14 @@ namespace AutoPinSigns
                 if (!modEnabled.Value)
                     return;
 
-                if (___m_nview == null)
+                if (!___m_nview || !___m_nview.IsValid())
                     return;
 
-                if (!___m_nview.IsValid())
-                    return;
-
-                if (__instance.TryGetComponent<Sign>(out Sign component))
+                if (__instance.TryGetComponent(out Sign component) && IsPinnableSign(component.GetText().ToLower()))
                 {
-                    string text = (string)AccessTools.Method(typeof(Sign), "GetText").Invoke(component, new object[] { });
-                    if (IsPinnableSign(text.ToLower()))
-                    {
-                        Vector3 pos = __instance.transform.position;
-                        if (itemsPins.ContainsKey(pos))
-                        {
-                            DeleteClosestPins(pos);
-                        }
-                    }
+                    if (itemsPins.ContainsKey(__instance.transform.position))
+                        DeleteClosestPins(__instance.transform.position, 1f);
                 }
-            }
-        }
-
-        [HarmonyPatch(typeof(Terminal), nameof(Terminal.InputText))]
-        public static class Terminal_InputText_Commands
-        {
-            static bool Prefix(Terminal __instance)
-            {
-                if (!modEnabled.Value)
-                    return true;
-
-                string text = __instance.m_input.text;
-                if (text.ToLower().StartsWith($"{typeof(AutoPinSigns).Namespace.ToLower()} clear"))
-                {
-                    if (Player.m_localPlayer == null)
-                        return true;
-
-                    var t = text.Split(' ');
-                    if (t.Length > 2 && float.TryParse(t[t.Length - 1], out float j) && j > 0f)
-                        DeleteClosestPins(Player.m_localPlayer.transform.position, j);
-                    else
-                        DeleteClosestPins(Player.m_localPlayer.transform.position);
-
-                    return false;
-                }
-
-                return true;
-
             }
         }
     }

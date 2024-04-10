@@ -23,25 +23,3 @@ The best way to handle configs is configuration manager. Choose one that works f
 https://www.nexusmods.com/site/mods/529
 
 https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationManager/
-
-## Changelog
-
-v 1.0.5
-* option to less strict strings comparison
-
-v 1.0.4
-* patch 0.217.22
-
-v 1.0.3
-* improved stability
-* support of signs with html tags
-* console command to clear nearest pins
-
-v 1.0.2
-* Added some protection from potential issues
-
-v 1.0.1
-* Added config update on sign interaction
-
-v 1.0.0
-* Initial release

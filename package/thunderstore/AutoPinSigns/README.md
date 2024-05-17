@@ -3,9 +3,6 @@ Create map pins based on sign's text you placed. Useful for nomap + Compass play
 
 The mod was not intended as a fully functional replacement for pins in nomap walkthrough. Just to pin most important POI like main base and remote camps or to be some beacon for sailing home.
 
-## Installation (manual)
-extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
-
 ## Features
 * Creates a pin on the minimap when you set text on sign that fits list
 * Configurable strings filter for 5 map pins (fire,base,hammer,dot,portal)
@@ -17,9 +14,13 @@ extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
 ## Known issues
 * if someone destroyed pinned sign when you're not there your pin will stay. Still you can build and destroy sign in that place to remove your pin from map.
 
+## Installation (manual)
+extract AutoPinSigns.dll file to your BepInEx\Plugins\ folder
+
 ## Configurating
-The best way to handle configs is configuration manager. Choose one that works for you:
+The best way to handle configs is [Configuration Manager](https://thunderstore.io/c/valheim/p/shudnal/ConfigurationManager/).
 
-https://www.nexusmods.com/site/mods/529
+Or [Official BepInEx Configuration Manager](https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationManager/).
 
-https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationManager/
+## Mirrors
+[Nexus](https://www.nexusmods.com/valheim/mods/2433)

@@ -1,6 +1,6 @@
 {
   "name": "AutoPinSigns",
-  "version_number": "1.0.6",
+  "version_number": "1.0.7",
   "website_url": "https://github.com/shudnal/AutoPinSigns",
   "description": "Create map pins based on sign's text you placed.",
   "dependencies": ["denikson-BepInExPack_Valheim-5.4.2202"]

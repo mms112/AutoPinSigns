@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Linq;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
@@ -13,9 +12,9 @@ namespace AutoPinSigns
     [BepInPlugin(pluginID, pluginName, pluginVersion)]
     public class AutoPinSigns : BaseUnityPlugin
     {
-        const string pluginID = "shudnal.AutoPinSigns";
-        const string pluginName = "Auto Pin Signs";
-        const string pluginVersion = "1.0.7";
+        public const string pluginID = "shudnal.AutoPinSigns";
+        public const string pluginName = "Auto Pin Signs";
+        public const string pluginVersion = "1.0.8";
         
         private Harmony _harmony;
 
@@ -196,7 +195,7 @@ namespace AutoPinSigns
                 if (!Minimap.instance)
                     return;
 
-                string lowertext = Regex.Replace(__instance.GetText().ToLower(), @"<(.|\n)*?>", "");
+                string lowertext = __instance.GetText().RemoveRichTextTags().ToLower();
 
                 Vector3 pos = __instance.transform.position;
 
@@ -214,7 +213,6 @@ namespace AutoPinSigns
                         DeleteClosestPins(pos);
                     }
                     else return;
-
                 }
 
                 if (!IsPinnableSign(lowertext))

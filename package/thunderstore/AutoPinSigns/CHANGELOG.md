@@ -1,3 +1,10 @@
+# 1.1.0
+* complete rework
+* more stable sign recognition and state update
+* pin list configs now have custom config drawer for configuration manager
+* after pin list config update sign states will be updated
+* new config for removing nearby pins with no related signs
+
 # 1.0.8
 * patch 0.220.3
 

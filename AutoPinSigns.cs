@@ -6,20 +6,23 @@ using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
+using static Minimap;
 
 namespace AutoPinSigns
 {
     [BepInPlugin(pluginID, pluginName, pluginVersion)]
-    public class AutoPinSigns : BaseUnityPlugin
+    public partial class AutoPinSigns : BaseUnityPlugin
     {
         public const string pluginID = "shudnal.AutoPinSigns";
         public const string pluginName = "Auto Pin Signs";
-        public const string pluginVersion = "1.0.8";
+        public const string pluginVersion = "1.1.0";
         
         private Harmony _harmony;
 
         private static ConfigEntry<bool> modEnabled;
+        private static ConfigEntry<bool> loggingEnabled;
         private static ConfigEntry<bool> allowSubstrings;
+        private static ConfigEntry<bool> removePinsWithoutSigns;
 
         private static ConfigEntry<string> configFireList;
         private static ConfigEntry<string> configBaseList;
@@ -27,12 +30,13 @@ namespace AutoPinSigns
         private static ConfigEntry<string> configPinList;
         private static ConfigEntry<string> configPortalList;
 
-        private static Dictionary<Vector3, string> itemsPins = new Dictionary<Vector3, string>();
         private static readonly HashSet<string> fireList = new HashSet<string>();
         private static readonly HashSet<string> baseList = new HashSet<string>();
         private static readonly HashSet<string> hammerList = new HashSet<string>();
         private static readonly HashSet<string> pinList = new HashSet<string>();
         private static readonly HashSet<string> portalList = new HashSet<string>();
+
+        private static readonly HashSet<string> allpins = new HashSet<string>();
 
         private static AutoPinSigns instance;
 
@@ -51,24 +55,66 @@ namespace AutoPinSigns
             _harmony?.UnpatchSelf();
         }
 
+        private static void LogInfo(object data)
+        {
+            if (loggingEnabled.Value)
+                instance.Logger.LogInfo(data);
+        }
+
         private void ConfigInit()
         {
             modEnabled = Config.Bind("General", "Enabled", defaultValue: true, "Enable the mod");
+            loggingEnabled = Config.Bind("General", "Logging enabled", defaultValue: false, "Enable logging");
             allowSubstrings = Config.Bind("General", "Less strict string comparison", defaultValue: false, "Less strict comparison of config substrings. Enable to create pins if sign have any substring instead of exact match");
+            removePinsWithoutSigns = Config.Bind("General", "Remove nearby map pins without related signs", defaultValue: false, "If enabled - if nearby pin has no related sign that pin will be removed from map.");
 
-            configFireList = Config.Bind("Signs", "FireList", defaultValue: "fire", "List of the case-insensitive strings to add Fire pin.  Comma-separate each string.  Default: fire");
-            configBaseList = Config.Bind("Signs", "BaseList", defaultValue: "base", "List of the case-insensitive strings to add Base pin.  Comma-separate each string.  Default: base");
-            configHammerList = Config.Bind("Signs", "HammerList", defaultValue: "hammer", "List of the strings to add Hammer pin.  Comma-separate each string.  Default: hammer");
-            configPinList = Config.Bind("Signs", "PinList", defaultValue: "pin,dot", "List of the strings to add Dot pin.  Comma-separate each string.  Default: pin,dot");
-            configPortalList = Config.Bind("Signs", "PortalList", defaultValue: "portal", "List of the strings to add Portal pin.  Comma-separate each string.  Default: portal");
 
+            configFireList = Config.Bind("Signs", "FireList", defaultValue: "fire", new ConfigDescription("List of the case-insensitive strings to add Fire pin. Comma-separate each string.", 
+                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+            configBaseList = Config.Bind("Signs", "BaseList", defaultValue: "base,shelter,home,house", new ConfigDescription("List of the case-insensitive strings to add Base pin. Comma-separate each string.", 
+                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+            configHammerList = Config.Bind("Signs", "HammerList", defaultValue: "hammer,crypt,mine,boss,cave", new ConfigDescription("List of the strings to add Hammer pin. Comma-separate each string.", 
+                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+            configPinList = Config.Bind("Signs", "PinList", defaultValue: "pin,dot,ore,vein,point", new ConfigDescription("List of the strings to add Dot pin. Comma-separate each string.", 
+                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+            configPortalList = Config.Bind("Signs", "PortalList", defaultValue: "portal", new ConfigDescription("List of the strings to add Portal pin. Comma-separate each string.", 
+                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+
+            configFireList.SettingChanged += ConfigList_SettingChanged;
+            configBaseList.SettingChanged += ConfigList_SettingChanged;
+            configHammerList.SettingChanged += ConfigList_SettingChanged;
+            configPinList.SettingChanged += ConfigList_SettingChanged;
+            configPortalList.SettingChanged += ConfigList_SettingChanged;
+
+            UpdatePinLists();
+
+            InitCommands();
+        }
+
+        private void ConfigList_SettingChanged(object sender, EventArgs e) => UpdatePinLists();
+
+        private static void UpdatePinLists()
+        {
             AddToHS(configFireList.Value, fireList);
             AddToHS(configBaseList.Value, baseList);
             AddToHS(configHammerList.Value, hammerList);
             AddToHS(configPinList.Value, pinList);
             AddToHS(configPortalList.Value, portalList);
 
-            InitCommands();
+            allpins.Clear();
+            allpins.UnionWith(fireList);
+            allpins.UnionWith(baseList);
+            allpins.UnionWith(hammerList);
+            allpins.UnionWith(pinList);
+            allpins.UnionWith(portalList);
+
+            signStates.Do(kvp => kvp.Value.UpdateMapPin());
+        }
+
+        static void AddToHS(string text, HashSet<string> hashSet)
+        {
+            hashSet.Clear();
+            hashSet.UnionWith(text.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(entry => entry.ToLower().Trim()));
         }
 
         public static void InitCommands()
@@ -85,170 +131,129 @@ namespace AutoPinSigns
                     return;
 
                 if (args.Args.Length >= 2 && args.Args[1] == "clear")
-                {
-                    if (args.Args.Length > 2 && float.TryParse(args.Args[2], out float j))
-                        DeleteClosestPins(Player.m_localPlayer.transform.position, j);
-                    else
-                        DeleteClosestPins(Player.m_localPlayer.transform.position);
-                }
+                    while (FindAndDeleteClosestPin(Player.m_localPlayer.transform.position, args.Args.Length > 2 && float.TryParse(args.Args[2], out float j) ? j : 0)) { }
                 else
-                {
                     args.Context.AddString($"Syntax: {typeof(AutoPinSigns).Namespace.ToLower()} [action]");
-                }
 
             }, isCheat: false, isNetwork: false, onlyServer: false, isSecret: false, allowInDevBuild: false, () => new List<string>() { "clear [range] -  Clear closest to current player pins in set range. Default 5" }, alwaysRefreshTabOptions: true, remoteCommand: false);
-        }
 
-        private static bool IsSign(HashSet<string> list, string text)
-        {
-            if (allowSubstrings.Value)
-                return list.Any(x => text.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
-            else
-                return list.Contains(text);
-        }
-
-        static bool IsFireSign(string text)
-        {
-            return IsSign(fireList, text);
-        }
-        static bool IsBaseSign(string text)
-        {
-            return IsSign(baseList, text);
-        }
-        static bool IsHammerSign(string text)
-        {
-            return IsSign(hammerList, text);
-        }
-        static bool IsPinSign(string text)
-        {
-            return IsSign(pinList, text);
-        }
-        static bool IsPortalSign(string text)
-        {
-            return IsSign(portalList, text);
-        }
-
-        static bool IsPinnableSign(string text)
-        {
-            return IsFireSign(text) || IsBaseSign(text) || IsHammerSign(text) || IsPinSign(text) || IsPortalSign(text);
-        }
-
-        static Minimap.PinType GetIcon(string text)
-        {
-            if (IsFireSign(text))
-                return Minimap.PinType.Icon0;
-            if (IsBaseSign(text))
-                return Minimap.PinType.Icon1;
-            if (IsHammerSign(text))
-                return Minimap.PinType.Icon2;
-            if (IsPinSign(text))
-                return Minimap.PinType.Icon3;
-            if (IsPortalSign(text))
-                return Minimap.PinType.Icon4;
-
-            return Minimap.PinType.Icon3;
-        }
-
-        static void AddToHS(string text, HashSet<string> HS)
-        {
-            HS.Clear();
-
-            char[] separator = new char[1] { ',' };
-            foreach (string item in text.Replace(" ", "").Split(separator, StringSplitOptions.RemoveEmptyEntries))
+            static bool FindAndDeleteClosestPin(Vector3 pos, float distance = 5.0f)
             {
-                HS.Add(item);
+                if (Minimap.instance)
+                {
+                    foreach (PinData pin in Minimap.instance.m_pins)
+                    {
+                        if (Utils.DistanceXZ(pos, pin.m_pos) < distance)
+                        {
+                            Minimap.instance.RemovePin(pin);
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
             }
         }
 
-        static public void DeleteClosestPins(Vector3 pos, float distance = 5.0f)
-        {
-            while (FindAndDeleteClosestPin(pos, distance)) { };
+        private static bool IsAutoPinIcon(PinType pinType) => pinType == PinType.Icon0
+                                                   || pinType == PinType.Icon1
+                                                   || pinType == PinType.Icon2
+                                                   || pinType == PinType.Icon3
+                                                   || pinType == PinType.Icon4;
 
-            itemsPins = itemsPins.Where(pin_pos => Utils.DistanceXZ(pos, pin_pos.Key) >= distance).ToDictionary(kv => kv.Key, kv => kv.Value);
+        private static readonly List<Piece> tempPieces = new List<Piece>();
+        private static Vector2i currentZone = Vector2i.zero;
+
+        void FixedUpdate()
+        {
+            if (!(modEnabled.Value && removePinsWithoutSigns.Value))
+                return;
+
+            if (!ZNet.instance)
+                return;
+
+            if (currentZone == (currentZone = ZoneSystem.GetZone(ZNet.instance.GetReferencePosition())))
+                return;
+            
+            if (!Minimap.instance || !IsCurrentZoneActive())
+                return;
+
+            foreach (PinData pin in Minimap.instance.m_pins.Where(IsPinToRemove).ToList())
+            {
+                LogInfo($"Removed map pin without sign: \"{pin.m_name}\" {pin.m_icon?.name} {pin.m_pos}");
+                Minimap.instance.RemovePin(pin);
+            }
         }
 
-        static public bool FindAndDeleteClosestPin(Vector3 pos, float distance = 5.0f)
+        private static bool IsPinToRemove(PinData pin)
         {
-            if (Minimap.instance)
+            if (pin.m_ownerID == 0L && pin.m_save && IsAutoPinIcon(pin.m_type) && currentZone == ZoneSystem.GetZone(pin.m_pos))
             {
-                foreach (Minimap.PinData pin in Minimap.instance.m_pins)
-                {
-                    if (Utils.DistanceXZ(pos, pin.m_pos) < distance)
-                    {
-                        Minimap.instance.RemovePin(pin);
-                        return true;
-                    }
-                }
+                tempPieces.Clear();
+                Piece.GetAllPiecesInRadius(pin.m_pos, 1f, tempPieces);
+                return !tempPieces.Any(pieceStates.ContainsKey);
             }
 
             return false;
         }
 
+        private static bool IsCurrentZoneActive() => ZoneSystem.instance && ZoneSystem.instance.IsZoneLoaded(currentZone) && ZoneSystem.instance.m_zones.TryGetValue(currentZone, out var zoneData) && zoneData.m_ttl <= 0.1f;
+
+        public static readonly Dictionary<Sign, SignState> signStates = new Dictionary<Sign, SignState>();
+        public static readonly Dictionary<Piece, SignState> pieceStates = new Dictionary<Piece, SignState>();
+        public static readonly Dictionary<WearNTear, SignState> wntStates = new Dictionary<WearNTear, SignState>();
+
         [HarmonyPatch(typeof(Sign), nameof(Sign.UpdateText))]
-        public static class Sign_UpdateText_patch
+        public static class Sign_UpdateText_UpdateSignState
         {
-            static void Postfix(Sign __instance)
+            public static void Postfix(Sign __instance)
             {
                 if (!modEnabled.Value)
                     return;
 
-                if (!Minimap.instance)
-                    return;
-
-                string lowertext = __instance.GetText().RemoveRichTextTags().ToLower();
-
-                Vector3 pos = __instance.transform.position;
-
-                if (itemsPins.ContainsKey(pos))
-                {
-                    string currenttext = itemsPins[pos];
-
-                    if (!IsPinnableSign(lowertext))
-                    {
-                        DeleteClosestPins(pos);
-                        return;
-                    }
-                    else if (currenttext != lowertext)
-                    {
-                        DeleteClosestPins(pos);
-                    }
-                    else return;
-                }
-
-                if (!IsPinnableSign(lowertext))
-                    return;
-
-                Minimap.PinType icon = GetIcon(lowertext);
-
-                if (Minimap.instance.HaveSimilarPin(pos, icon, lowertext, true))
-                    return;
-
-                Minimap.instance.AddPin(pos, icon, lowertext, true, false, 0L);
-                itemsPins.Add(pos, lowertext);
-
-                Sprite m_icon_sprite = Minimap.instance.GetSprite(icon);
-
-                Player.m_localPlayer?.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + lowertext, 0, m_icon_sprite);
+                SignState.UpdatePinState(__instance);
             }
         }
 
         [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.Destroy))]
-        public static class WearNTear_Destroy_patch
+        public static class WearNTear_Destroy_RemoveAddedPin
         {
-            static void Prefix(ref WearNTear __instance, ZNetView ___m_nview)
+            public static void Prefix(WearNTear __instance)
             {
                 if (!modEnabled.Value)
                     return;
 
-                if (!___m_nview || !___m_nview.IsValid())
+                if (wntStates.TryGetValue(__instance, out SignState signState))
+                    signState.RemoveMapPin();
+            }
+        }
+
+        [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.OnDestroy))]
+        public static class WearNTear_OnDestroy_RemoveSignState
+        {
+            public static void Prefix(WearNTear __instance)
+            {
+                if (!modEnabled.Value)
                     return;
 
-                if (__instance.TryGetComponent(out Sign component) && IsPinnableSign(component.GetText().ToLower()))
+                if (wntStates.TryGetValue(__instance, out SignState signState))
                 {
-                    if (itemsPins.ContainsKey(__instance.transform.position))
-                        DeleteClosestPins(__instance.transform.position, 1f);
+                    signStates.Remove(signState.m_sign);
+                    pieceStates.Remove(signState.m_piece);
+                    wntStates.Remove(signState.m_wnt);
                 }
             }
         }
+
+        [HarmonyPatch(typeof(ZoneSystem), nameof(ZoneSystem.OnDestroy))]
+        public static class ZoneSystem_OnDestroy_Clear
+        {
+            public static void Prefix()
+            {
+                signStates.Clear();
+                pieceStates.Clear();
+                wntStates.Clear();
+            }
+        }
     }
- }
+}

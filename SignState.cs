@@ -55,7 +55,7 @@ namespace AutoPinSigns
                     if (m_pin != null)
                         return;
 
-                    m_pin = Minimap.instance.AddPin(m_sign.transform.position, pinType, m_text, save: true, isChecked: false);
+                    m_pin = Minimap.instance.AddPin(m_sign.transform.position, pinType, m_text, save: true, isChecked: checkedList.Any(x => m_text.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0));
 
                     LogInfo($"Added map pin from sign: \"{m_pin.m_name}\" {m_pin.m_icon?.name} {m_pin.m_pos}");
 

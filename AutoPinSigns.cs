@@ -29,12 +29,14 @@ namespace AutoPinSigns
         private static ConfigEntry<string> configHammerList;
         private static ConfigEntry<string> configPinList;
         private static ConfigEntry<string> configPortalList;
+        private static ConfigEntry<string> configCheckedList;
 
         private static readonly HashSet<string> fireList = new HashSet<string>();
         private static readonly HashSet<string> baseList = new HashSet<string>();
         private static readonly HashSet<string> hammerList = new HashSet<string>();
         private static readonly HashSet<string> pinList = new HashSet<string>();
         private static readonly HashSet<string> portalList = new HashSet<string>();
+        private static readonly HashSet<string> checkedList = new HashSet<string>();
 
         private static readonly HashSet<string> allpins = new HashSet<string>();
 
@@ -79,12 +81,15 @@ namespace AutoPinSigns
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
             configPortalList = Config.Bind("Signs", "PortalList", defaultValue: "portal", new ConfigDescription("List of the strings to add Portal pin. Comma-separate each string.", 
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+            configCheckedList = Config.Bind("Signs", "CheckedList", defaultValue: "(x)", new ConfigDescription("List of the strings to consider this pin checked. Comma-separate each string.",
+                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
 
             configFireList.SettingChanged += ConfigList_SettingChanged;
             configBaseList.SettingChanged += ConfigList_SettingChanged;
             configHammerList.SettingChanged += ConfigList_SettingChanged;
             configPinList.SettingChanged += ConfigList_SettingChanged;
             configPortalList.SettingChanged += ConfigList_SettingChanged;
+            configCheckedList.SettingChanged += ConfigList_SettingChanged;
 
             UpdatePinLists();
 
@@ -100,6 +105,7 @@ namespace AutoPinSigns
             AddToHS(configHammerList.Value, hammerList);
             AddToHS(configPinList.Value, pinList);
             AddToHS(configPortalList.Value, portalList);
+            AddToHS(configCheckedList.Value, checkedList);
 
             allpins.Clear();
             allpins.UnionWith(fireList);

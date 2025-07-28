@@ -7,6 +7,7 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
 using static Minimap;
+using ServerSync;
 
 namespace AutoPinSigns
 {
@@ -16,10 +17,13 @@ namespace AutoPinSigns
         public const string pluginID = "shudnal.AutoPinSigns";
         public const string pluginName = "Auto Pin Signs";
         public const string pluginVersion = "1.1.0";
-        
+
+        internal static readonly ConfigSync configSync = new ConfigSync(pluginID) { DisplayName = pluginName, CurrentVersion = pluginVersion, MinimumRequiredVersion = pluginVersion };
+
         private Harmony _harmony;
 
         private static ConfigEntry<bool> modEnabled;
+        private static ConfigEntry<bool> configLocked;
         private static ConfigEntry<bool> loggingEnabled;
         private static ConfigEntry<bool> allowSubstrings;
         private static ConfigEntry<bool> removePinsWithoutSigns;
@@ -53,7 +57,7 @@ namespace AutoPinSigns
 
         private void OnDestroy()
         {
-            Config.Save();
+            //Config.Save(); Do not save the config, to keep the synced values
             _harmony?.UnpatchSelf();
         }
 
@@ -65,23 +69,24 @@ namespace AutoPinSigns
 
         private void ConfigInit()
         {
-            modEnabled = Config.Bind("General", "Enabled", defaultValue: true, "Enable the mod");
-            loggingEnabled = Config.Bind("General", "Logging enabled", defaultValue: false, "Enable logging");
-            allowSubstrings = Config.Bind("General", "Less strict string comparison", defaultValue: false, "Less strict comparison of config substrings. Enable to create pins if sign have any substring instead of exact match");
-            removePinsWithoutSigns = Config.Bind("General", "Remove nearby map pins without related signs", defaultValue: false, "If enabled - if nearby pin has no related sign that pin will be removed from map.");
+            modEnabled = config("General", "Enabled", defaultValue: true, "Enable the mod");
+            configLocked = config("General", "LockConfiguration", true, "Configuration is locked and can be changed by server admins only.");
+            loggingEnabled = config("General", "Logging enabled", defaultValue: false, "Enable logging", false);
+            allowSubstrings = config("General", "Less strict string comparison", defaultValue: false, "Less strict comparison of config substrings. Enable to create pins if sign have any substring instead of exact match");
+            removePinsWithoutSigns = config("General", "Remove nearby map pins without related signs", defaultValue: false, "If enabled - if nearby pin has no related sign that pin will be removed from map.", false);
 
 
-            configFireList = Config.Bind("Signs", "FireList", defaultValue: "fire", new ConfigDescription("List of the case-insensitive strings to add Fire pin. Comma-separate each string.", 
+            configFireList = config("Signs", "FireList", defaultValue: "fire", new ConfigDescription("List of the case-insensitive strings to add Fire pin. Comma-separate each string.", 
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configBaseList = Config.Bind("Signs", "BaseList", defaultValue: "base,shelter,home,house", new ConfigDescription("List of the case-insensitive strings to add Base pin. Comma-separate each string.", 
+            configBaseList = config("Signs", "BaseList", defaultValue: "base,shelter,home,house", new ConfigDescription("List of the case-insensitive strings to add Base pin. Comma-separate each string.", 
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configHammerList = Config.Bind("Signs", "HammerList", defaultValue: "hammer,crypt,mine,boss,cave", new ConfigDescription("List of the strings to add Hammer pin. Comma-separate each string.", 
+            configHammerList = config("Signs", "HammerList", defaultValue: "hammer,crypt,mine,boss,cave", new ConfigDescription("List of the strings to add Hammer pin. Comma-separate each string.", 
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configPinList = Config.Bind("Signs", "PinList", defaultValue: "pin,dot,ore,vein,point", new ConfigDescription("List of the strings to add Dot pin. Comma-separate each string.", 
+            configPinList = config("Signs", "PinList", defaultValue: "pin,dot,ore,vein,point", new ConfigDescription("List of the strings to add Dot pin. Comma-separate each string.", 
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configPortalList = Config.Bind("Signs", "PortalList", defaultValue: "portal", new ConfigDescription("List of the strings to add Portal pin. Comma-separate each string.", 
+            configPortalList = config("Signs", "PortalList", defaultValue: "portal", new ConfigDescription("List of the strings to add Portal pin. Comma-separate each string.", 
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configCheckedList = Config.Bind("Signs", "CheckedList", defaultValue: "(x)", new ConfigDescription("List of the strings to consider this pin checked. Comma-separate each string.",
+            configCheckedList = config("Signs", "CheckedList", defaultValue: "(x)", new ConfigDescription("List of the strings to consider this pin checked. Comma-separate each string.",
                                                                                     null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
 
             configFireList.SettingChanged += ConfigList_SettingChanged;
@@ -91,10 +96,24 @@ namespace AutoPinSigns
             configPortalList.SettingChanged += ConfigList_SettingChanged;
             configCheckedList.SettingChanged += ConfigList_SettingChanged;
 
+            configSync.AddLockingConfigEntry(configLocked);
+
             UpdatePinLists();
 
             InitCommands();
         }
+
+        ConfigEntry<T> config<T>(string group, string name, T defaultValue, ConfigDescription description, bool synchronizedSetting = true)
+        {
+            ConfigEntry<T> configEntry = Config.Bind(group, name, defaultValue, description);
+
+            SyncedConfigEntry<T> syncedConfigEntry = configSync.AddConfigEntry(configEntry);
+            syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
+
+            return configEntry;
+        }
+
+        ConfigEntry<T> config<T>(string group, string name, T defaultValue, string description, bool synchronizedSetting = true) => config(group, name, defaultValue, new ConfigDescription(description), synchronizedSetting);
 
         private void ConfigList_SettingChanged(object sender, EventArgs e) => UpdatePinLists();
 

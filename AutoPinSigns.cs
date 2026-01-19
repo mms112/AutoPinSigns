@@ -1,10 +1,11 @@
-﻿using System;
-using System.Linq;
-using System.Collections.Generic;
-using System.Reflection;
-using BepInEx;
+﻿using BepInEx;
+using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using HarmonyLib;
+using ServerSync;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using static Minimap;
 
@@ -15,26 +16,45 @@ namespace AutoPinSigns
     {
         public const string pluginID = "shudnal.AutoPinSigns";
         public const string pluginName = "Auto Pin Signs";
-        public const string pluginVersion = "1.1.0";
-        
-        private Harmony _harmony;
+        public const string pluginVersion = "1.2.0";
+
+        private readonly Harmony harmony = new Harmony(pluginID);
+
+        internal static readonly ConfigSync configSync = new ConfigSync(pluginID) { DisplayName = pluginName, CurrentVersion = pluginVersion, MinimumRequiredVersion = pluginVersion };
 
         private static ConfigEntry<bool> modEnabled;
+        internal static ConfigEntry<bool> configLocked;
         private static ConfigEntry<bool> loggingEnabled;
         private static ConfigEntry<bool> allowSubstrings;
         private static ConfigEntry<bool> removePinsWithoutSigns;
+        private static ConfigEntry<bool> stripHTMLTags;
 
+        private static ConfigEntry<bool> useStringsList;
         private static ConfigEntry<string> configFireList;
         private static ConfigEntry<string> configBaseList;
         private static ConfigEntry<string> configHammerList;
         private static ConfigEntry<string> configPinList;
         private static ConfigEntry<string> configPortalList;
 
+        private static ConfigEntry<bool> useStringsPrefix;
+        private static ConfigEntry<string> configFirePrefix;
+        private static ConfigEntry<string> configBasePrefix;
+        private static ConfigEntry<string> configHammerPrefix;
+        private static ConfigEntry<string> configPinPrefix;
+        private static ConfigEntry<string> configPortalPrefix;
+
         private static readonly HashSet<string> fireList = new HashSet<string>();
         private static readonly HashSet<string> baseList = new HashSet<string>();
         private static readonly HashSet<string> hammerList = new HashSet<string>();
         private static readonly HashSet<string> pinList = new HashSet<string>();
         private static readonly HashSet<string> portalList = new HashSet<string>();
+
+        private static readonly HashSet<string> firePrefix = new HashSet<string>();
+        private static readonly HashSet<string> basePrefix = new HashSet<string>();
+        private static readonly HashSet<string> hammerPrefix = new HashSet<string>();
+        private static readonly HashSet<string> pinPrefix = new HashSet<string>();
+        private static readonly HashSet<string> portalPrefix = new HashSet<string>();
+
 
         private static readonly HashSet<string> allpins = new HashSet<string>();
 
@@ -44,15 +64,20 @@ namespace AutoPinSigns
         {
             ConfigInit();
 
-            _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), pluginID);
+            harmony.PatchAll();
 
             instance = this;
+
+            _ = configSync.AddLockingConfigEntry(configLocked);
+
+            Game.isModded = true;
         }
 
         private void OnDestroy()
         {
             Config.Save();
-            _harmony?.UnpatchSelf();
+            harmony?.UnpatchSelf();
+            instance = null;
         }
 
         private static void LogInfo(object data)
@@ -61,24 +86,35 @@ namespace AutoPinSigns
                 instance.Logger.LogInfo(data);
         }
 
+        private ConfigDescription GetDescriptionSeparatedStrings(string description) =>
+            Chainloader.PluginInfos.ContainsKey("_shudnal.ConfigurationManager")
+                    ? new ConfigDescription(description)
+                    : new ConfigDescription(description, null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") });
+
         private void ConfigInit()
         {
-            modEnabled = Config.Bind("General", "Enabled", defaultValue: true, "Enable the mod");
-            loggingEnabled = Config.Bind("General", "Logging enabled", defaultValue: false, "Enable logging");
-            allowSubstrings = Config.Bind("General", "Less strict string comparison", defaultValue: false, "Less strict comparison of config substrings. Enable to create pins if sign have any substring instead of exact match");
-            removePinsWithoutSigns = Config.Bind("General", "Remove nearby map pins without related signs", defaultValue: false, "If enabled - if nearby pin has no related sign that pin will be removed from map.");
+            modEnabled = config("General", "Enabled", defaultValue: true, "Enable the mod");
+            configLocked = config("General", "Lock Configuration", defaultValue: true, "Configuration is locked and can be changed by server admins only.");
+            loggingEnabled = config("General", "Logging enabled", defaultValue: false, "Enable logging. [Not Synced with Server]", false);
+            removePinsWithoutSigns = config("General", "Remove nearby map pins without related signs", defaultValue: false, "If enabled - if nearby pin has no related sign that pin will be removed from map.");
+            allowSubstrings = config("General", "Less strict string comparison", defaultValue: true, "Enable to create pins if the sign text contains any configured word instead of requiring an exact match.");
+            stripHTMLTags = config("General", "Strip HTML tags from text", defaultValue: true, "Should sign text be stripped of HTML tags before string comparison. Disable this is you want HTML prefixes.");
 
+            useStringsPrefix = config("Matching Mode", "Use prefix matching", defaultValue: true,
+                "If enabled, the mod checks whether sign text starts with a configured prefix (e.g. \"Pin: \"). " +
+                "Prefix text is NOT included in the pin name or visible sign text, but is preserved when editing the sign."
+            );
 
-            configFireList = Config.Bind("Signs", "FireList", defaultValue: "fire", new ConfigDescription("List of the case-insensitive strings to add Fire pin. Comma-separate each string.", 
-                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configBaseList = Config.Bind("Signs", "BaseList", defaultValue: "base,shelter,home,house", new ConfigDescription("List of the case-insensitive strings to add Base pin. Comma-separate each string.", 
-                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configHammerList = Config.Bind("Signs", "HammerList", defaultValue: "hammer,crypt,mine,boss,cave", new ConfigDescription("List of the strings to add Hammer pin. Comma-separate each string.", 
-                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configPinList = Config.Bind("Signs", "PinList", defaultValue: "pin,dot,ore,vein,point", new ConfigDescription("List of the strings to add Dot pin. Comma-separate each string.", 
-                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
-            configPortalList = Config.Bind("Signs", "PortalList", defaultValue: "portal", new ConfigDescription("List of the strings to add Portal pin. Comma-separate each string.", 
-                                                                                    null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") }));
+            useStringsList = config("Matching Mode", "Use string list matching", defaultValue: true,
+                "If enabled, the mod compares the full sign text against configured word lists. " +
+                "The full sign text becomes the pin name."
+            );
+
+            configFireList = config("Signs", "FireList", defaultValue: "fire", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Fire pin. Comma-separate each string."));
+            configBaseList = config("Signs", "BaseList", defaultValue: "base,shelter,home,house", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Base pin. Comma-separate each string."));
+            configHammerList = config("Signs", "HammerList", defaultValue: "hammer,crypt,mine,boss,cave", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Hammer pin. Comma-separate each string."));
+            configPinList = config("Signs", "PinList", defaultValue: "pin,dot,ore,vein,point", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Dot pin. Comma-separate each string."));
+            configPortalList = config("Signs", "PortalList", defaultValue: "portal", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Portal pin. Comma-separate each string."));
 
             configFireList.SettingChanged += ConfigList_SettingChanged;
             configBaseList.SettingChanged += ConfigList_SettingChanged;
@@ -86,10 +122,34 @@ namespace AutoPinSigns
             configPinList.SettingChanged += ConfigList_SettingChanged;
             configPortalList.SettingChanged += ConfigList_SettingChanged;
 
+            configFirePrefix = config("Signs - Prefixes", "Fire", defaultValue: "Fire:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Fire pin and omit prefix symbols. Comma-separate each string."));
+            configBasePrefix = config("Signs - Prefixes", "Base", defaultValue: "Base:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Base pin and omit prefix symbols. Comma-separate each string."));
+            configHammerPrefix = config("Signs - Prefixes", "Hammer", defaultValue: "Hammer:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Hammer pin and omit prefix symbols. Comma-separate each string."));
+            configPinPrefix = config("Signs - Prefixes", "Pin", defaultValue: "Pin:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Dot pin and omit prefix symbols. Comma-separate each string."));
+            configPortalPrefix = config("Signs - Prefixes", "Portal", defaultValue: "Portal:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Portal pin and omit prefix symbols. Comma-separate each string."));
+
+            configFirePrefix.SettingChanged += ConfigList_SettingChanged;
+            configBasePrefix.SettingChanged += ConfigList_SettingChanged;
+            configHammerPrefix.SettingChanged += ConfigList_SettingChanged;
+            configPinPrefix.SettingChanged += ConfigList_SettingChanged;
+            configPortalPrefix.SettingChanged += ConfigList_SettingChanged;
+
             UpdatePinLists();
 
             InitCommands();
         }
+
+        ConfigEntry<T> config<T>(string group, string name, T defaultValue, ConfigDescription description, bool synchronizedSetting = true)
+        {
+            ConfigEntry<T> configEntry = Config.Bind(group, name, defaultValue, description);
+
+            SyncedConfigEntry<T> syncedConfigEntry = configSync.AddConfigEntry(configEntry);
+            syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
+
+            return configEntry;
+        }
+
+        ConfigEntry<T> config<T>(string group, string name, T defaultValue, string description, bool synchronizedSetting = true) => config(group, name, defaultValue, new ConfigDescription(description), synchronizedSetting);
 
         private void ConfigList_SettingChanged(object sender, EventArgs e) => UpdatePinLists();
 
@@ -107,6 +167,12 @@ namespace AutoPinSigns
             allpins.UnionWith(hammerList);
             allpins.UnionWith(pinList);
             allpins.UnionWith(portalList);
+
+            AddToHS(configFirePrefix.Value, firePrefix);
+            AddToHS(configBasePrefix.Value, basePrefix);
+            AddToHS(configHammerPrefix.Value, hammerPrefix);
+            AddToHS(configPinPrefix.Value, pinPrefix);
+            AddToHS(configPortalPrefix.Value, portalPrefix);
 
             signStates.Do(kvp => kvp.Value.UpdateMapPin());
         }
@@ -203,8 +269,8 @@ namespace AutoPinSigns
         public static readonly Dictionary<Piece, SignState> pieceStates = new Dictionary<Piece, SignState>();
         public static readonly Dictionary<WearNTear, SignState> wntStates = new Dictionary<WearNTear, SignState>();
 
-        [HarmonyPatch(typeof(Sign), nameof(Sign.UpdateText))]
-        public static class Sign_UpdateText_UpdateSignState
+        [HarmonyPatch(typeof(Sign), nameof(Sign.OnCheckPermissionCompleted))]
+        public static class Sign_OnCheckPermissionCompleted_UpdateSignState
         {
             public static void Postfix(Sign __instance)
             {
@@ -215,14 +281,25 @@ namespace AutoPinSigns
             }
         }
 
+        [HarmonyPatch(typeof(Sign), nameof(Sign.GetText))]
+        public static class Sign_GetText_GetFullText
+        {
+            [HarmonyPriority(Priority.First)]
+            public static void Postfix(Sign __instance, ref string __result)
+            {
+                if (!modEnabled.Value)
+                    return;
+
+                if (signStates.TryGetValue(__instance, out SignState state))
+                    __result = state.m_rawText;
+            }
+        }
+
         [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.Destroy))]
         public static class WearNTear_Destroy_RemoveAddedPin
         {
             public static void Prefix(WearNTear __instance)
             {
-                if (!modEnabled.Value)
-                    return;
-
                 if (wntStates.TryGetValue(__instance, out SignState signState))
                     signState.RemoveMapPin();
             }
@@ -233,9 +310,6 @@ namespace AutoPinSigns
         {
             public static void Prefix(WearNTear __instance)
             {
-                if (!modEnabled.Value)
-                    return;
-
                 if (wntStates.TryGetValue(__instance, out SignState signState))
                 {
                     signStates.Remove(signState.m_sign);

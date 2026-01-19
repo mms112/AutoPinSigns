@@ -1,3 +1,7 @@
+# 1.2.0
+* configs will now be synced from server to clients if mod is installed on a server
+* new feature: Sign Prefixes. If enabled, the mod checks whether sign text starts with a configured prefix (e.g. "Pin: "). Prefix text is NOT included in the pin name or visible sign text, but is preserved when editing the sign.
+
 # 1.1.0
 * complete rework
 * more stable sign recognition and state update

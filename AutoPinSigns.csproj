@@ -12,7 +12,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>AutoPinSigns</RootNamespace>
     <AssemblyName>AutoPinSigns</AssemblyName>
-    <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
     <TargetFrameworkProfile />
@@ -49,6 +49,9 @@
     <Reference Include="BepInEx">
       <HintPath>F:\Steam\steamapps\common\Valheim\BepInEx\core\BepInEx.dll</HintPath>
     </Reference>
+    <Reference Include="ServerSync">
+      <HintPath>..\Assemblies\Managers\ServerSync.dll</HintPath>
+    </Reference>
     <Reference Include="Splatform, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\Assemblies\stable\Splatform.dll</HintPath>
@@ -70,6 +73,10 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\Assemblies\stable\UnityEngine.IMGUIModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.UI, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\Assemblies\stable\UnityEngine.UI.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AutoPinSigns.cs" />
@@ -77,14 +84,19 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SignState.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task">
+      <Version>2.0.44.1</Version>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="ILRepack.targets" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PostBuildEvent>xcopy "$(TargetDir)\$(TargetFileName)" "$(ProjectDir)package\thunderstore\$(SolutionName)\" /q /y /i
-
-echo Copy to thunderstore folder
-powershell Compress-Archive -Path '$(ProjectDir)\package\thunderstore\$(SolutionName)\*' -DestinationPath '$(ProjectDir)\package\thunderstore\$(SolutionName).zip' -Force
-
-echo Copy to r2 folder
-xcopy "$(TargetDir)\$(TargetFileName)" "D:\r2modman\Valheim\profiles\beta\BepInEx\plugins\shudnal-$(SolutionName)\" /q /y /i</PostBuildEvent>
+    <PostBuildEvent>
+    </PostBuildEvent>
   </PropertyGroup>
 </Project>

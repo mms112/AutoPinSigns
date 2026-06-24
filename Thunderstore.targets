@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ThunderstorePackageDirectory Condition="'$(ThunderstorePackageDirectory)' == ''">$(ProjectDir)package\thunderstore\$(MSBuildProjectName)\</ThunderstorePackageDirectory>
+    <LocalPluginDeployDirectory Condition="'$(LocalPluginDeployDirectory)' == ''">D:\r2modman\Valheim\profiles\beta\BepInEx\plugins\shudnal-$(SolutionName)\</LocalPluginDeployDirectory>
+  </PropertyGroup>
+
+  <Target Name="CopyDLLPackage" AfterTargets="Build" Condition="Exists('$(ThunderstorePackageDirectory)')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ThunderstorePackageDirectory)" />
+    <Message Text="Copied AutoPinSigns.dll to the Thunderstore package folder." Importance="High" />
+  </Target>
+
+  <Target Name="ZipOutputPath" AfterTargets="CopyDLLPackage" Condition="Exists('$(ThunderstorePackageDirectory)')">
+    <ZipDirectory
+      SourceDirectory="$(ThunderstorePackageDirectory)"
+      DestinationFile="$(ProjectDir)package\thunderstore\$(MSBuildProjectName).zip"
+      Overwrite="true" />
+  </Target>
+
+  <Target Name="CopyDLLPlugins" AfterTargets="Build" Condition="'$(LocalPluginDeployDirectory)' != ''">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(LocalPluginDeployDirectory)" />
+    <Message Text="Copied AutoPinSigns.dll to $(LocalPluginDeployDirectory)." Importance="High" />
+  </Target>
+</Project>

@@ -1,142 +1,115 @@
 ﻿using BepInEx.Configuration;
 using HarmonyLib;
-using JetBrains.Annotations;
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
 namespace AutoPinSigns
 {
-
 #nullable enable
 
-    internal class CustomConfigs
+    internal static class CustomConfigs
     {
-        internal class ConfigurationManagerAttributes
+        internal sealed class ConfigurationManagerAttributes
         {
-            /// <summary>
-            /// Custom setting editor (OnGUI code that replaces the default editor provided by ConfigurationManager).
-            /// See below for a deeper explanation. Using a custom drawer will cause many of the other fields to do nothing.
-            /// </summary>
-            [UsedImplicitly]
-            public System.Action<BepInEx.Configuration.ConfigEntryBase>? CustomDrawer;
+            public Action<ConfigEntryBase>? CustomDrawer;
         }
 
-        internal static object? configManager;
-
-        internal static Type? configManagerStyles;
-
-        internal static GUIStyle GetStyle(GUIStyle other)
-        {
-            if (configManagerStyles == null)
-                return other;
-
-            FieldInfo fieldFontSize = AccessTools.Field(configManagerStyles, "fontSize");
-            if (fieldFontSize == null)
-                return other;
-
-            return new GUIStyle(other)
-            {
-                fontSize = (int)fieldFontSize.GetValue(configManagerStyles)
-            };
-        }
+        private static Type? configManagerStyles;
+        private static FieldInfo? fontSizeField;
 
         internal static void Awake()
         {
-            Assembly? bepinexConfigManager = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "ConfigurationManager");
-            Type? configManagerType = bepinexConfigManager?.GetType("ConfigurationManager.ConfigurationManager");
-            configManager = configManagerType == null ? null : BepInEx.Bootstrap.Chainloader.ManagerObject.GetComponent(configManagerType);
+            Assembly? configurationManagerAssembly = null;
+            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            for (int i = 0; i < assemblies.Length; ++i)
+            {
+                if (assemblies[i].GetName().Name == "ConfigurationManager")
+                {
+                    configurationManagerAssembly = assemblies[i];
+                    break;
+                }
+            }
 
-            configManagerStyles = bepinexConfigManager?.GetType("ConfigurationManager.ConfigurationManagerStyles");
+            configManagerStyles = configurationManagerAssembly?.GetType("ConfigurationManager.ConfigurationManagerStyles");
+            fontSizeField = configManagerStyles == null ? null : AccessTools.Field(configManagerStyles, "fontSize");
         }
 
-        internal static Action<ConfigEntryBase> DrawSeparatedStrings(string splitString)
+        internal static Action<ConfigEntryBase> DrawSeparatedStrings(string separator)
         {
-            return cfg =>
+            return configEntry =>
             {
-                bool locked = cfg.Description.Tags.Select(a => a.GetType().Name == "ConfigurationManagerAttributes" ? (bool?)a.GetType().GetField("ReadOnly")?.GetValue(a) : null).FirstOrDefault(v => v != null) ?? false;
+                bool locked = IsReadOnly(configEntry);
+                string value = configEntry.BoxedValue as string ?? string.Empty;
+                string[] values = value.Split(new[] { separator }, StringSplitOptions.None);
+                string[] updatedValues = new string[values.Length + 1];
+                int updatedCount = 0;
+                bool changed = false;
 
-                bool wasUpdated = false;
+                GUIStyle textStyle = GetStyle(GUI.skin.textArea);
+                GUIStyle buttonStyle = GetStyle(GUI.skin.button);
 
                 GUILayout.BeginVertical();
-
-                List<string> newStrings = new List<string>();
-                List<string> strings = ((string)cfg.BoxedValue).Split(new string[] { splitString }, StringSplitOptions.None).ToList();
-
-                for (int i = 0; i < strings.Count; i++)
+                for (int i = 0; i < values.Length; ++i)
                 {
                     GUILayout.BeginHorizontal();
 
-                    string val = strings[i];
+                    string original = values[i];
+                    string edited = GUILayout.TextField(original, textStyle, GUILayout.ExpandWidth(true));
+                    if (!locked && edited != original)
+                        changed = true;
 
-                    string newVal = GUILayout.TextField(val, GetStyle(GUI.skin.textArea), GUILayout.ExpandWidth(true));
-
-                    if (newVal != val && !locked)
-                        wasUpdated = true;
-
-                    if (GUILayout.Button("x", new GUIStyle(GetStyle(GUI.skin.button)) { fixedWidth = 21 }) && !locked)
-                        wasUpdated = true;
+                    bool remove = GUILayout.Button("x", buttonStyle, GUILayout.Width(21f)) && !locked;
+                    if (remove)
+                    {
+                        changed = true;
+                    }
                     else
-                        newStrings.Add(newVal);
-
-                    if (GUILayout.Button("+", new GUIStyle(GetStyle(GUI.skin.button)) { fixedWidth = 21 }) && !locked)
                     {
-                        wasUpdated = true;
-                        newStrings.Add("");
+                        updatedValues[updatedCount++] = edited;
+                    }
+
+                    if (GUILayout.Button("+", buttonStyle, GUILayout.Width(21f)) && !locked)
+                    {
+                        changed = true;
+                        updatedValues[updatedCount++] = string.Empty;
                     }
 
                     GUILayout.EndHorizontal();
                 }
-
                 GUILayout.EndVertical();
 
-                if (wasUpdated)
-                    cfg.BoxedValue = String.Join(splitString, newStrings);
+                if (!changed)
+                    return;
+
+                configEntry.BoxedValue = string.Join(separator, updatedValues, 0, updatedCount);
             };
         }
 
-        internal static Action<ConfigEntryBase> DrawOrderedFixedStrings(string splitString)
+        private static bool IsReadOnly(ConfigEntryBase configEntry)
         {
-            return cfg =>
+            object[] tags = configEntry.Description.Tags;
+            for (int i = 0; i < tags.Length; ++i)
             {
-                bool locked = cfg.Description.Tags.Select(a => a.GetType().Name == "ConfigurationManagerAttributes" ? (bool?)a.GetType().GetField("ReadOnly")?.GetValue(a) : null).FirstOrDefault(v => v != null) ?? false;
+                object tag = tags[i];
+                Type type = tag.GetType();
+                if (type.Name != nameof(ConfigurationManagerAttributes))
+                    continue;
 
-                bool wasUpdated = false;
+                FieldInfo? readOnlyField = type.GetField("ReadOnly");
+                if (readOnlyField?.GetValue(tag) is bool readOnly)
+                    return readOnly;
+            }
 
-                GUILayout.BeginVertical();
+            return false;
+        }
 
-                string[] strings = ((string)cfg.BoxedValue).Split(new string[] { splitString }, StringSplitOptions.None).ToArray();
+        private static GUIStyle GetStyle(GUIStyle source)
+        {
+            if (fontSizeField?.GetValue(null) is not int fontSize || source.fontSize == fontSize)
+                return source;
 
-                for (int i = 0; i < strings.Length; i++)
-                {
-                    GUILayout.BeginHorizontal();
-
-                    string val = strings[i];
-
-                    GUILayout.Label(val, GetStyle(GUI.skin.textArea), GUILayout.ExpandWidth(true));
-
-                    if (GUILayout.Button("ʌ", new GUIStyle(GetStyle(GUI.skin.button)) { fixedWidth = 21 }) && !locked)
-                    {
-                        if (wasUpdated = i > 0)
-                            (strings[i], strings[i - 1]) = (strings[i - 1], strings[i]);
-                    }
-
-                    if (GUILayout.Button("v", new GUIStyle(GetStyle(GUI.skin.button)) { fixedWidth = 21 }) && !locked)
-                    {
-                        if (wasUpdated = i < strings.Length - 1)
-                            (strings[i], strings[i + 1]) = (strings[i + 1], strings[i]);
-                    }
-
-                    GUILayout.EndHorizontal();
-                }
-
-                GUILayout.EndVertical();
-
-                if (wasUpdated)
-                    cfg.BoxedValue = string.Join(splitString, strings);
-            };
+            return new GUIStyle(source) { fontSize = fontSize };
         }
     }
 }

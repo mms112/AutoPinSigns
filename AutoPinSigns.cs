@@ -2,332 +2,327 @@
 using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using HarmonyLib;
-using ServerSync;
+using ConditionalConfigSync;
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Globalization;
 using UnityEngine;
 using static Minimap;
 
 namespace AutoPinSigns
 {
     [BepInPlugin(pluginID, pluginName, pluginVersion)]
-    public partial class AutoPinSigns : BaseUnityPlugin
+    [BepInDependency("_shudnal.ConditionalConfigSync", BepInDependency.DependencyFlags.HardDependency)]
+    public sealed class AutoPinSigns : BaseUnityPlugin
     {
         public const string pluginID = "shudnal.AutoPinSigns";
         public const string pluginName = "Auto Pin Signs";
-        public const string pluginVersion = "1.2.0";
+        public const string pluginVersion = "2.0.0";
 
-        private readonly Harmony harmony = new Harmony(pluginID);
+        private static readonly Harmony harmony = new(pluginID);
 
-        internal static readonly ConfigSync configSync = new ConfigSync(pluginID) { DisplayName = pluginName, CurrentVersion = pluginVersion, MinimumRequiredVersion = pluginVersion };
+        internal static readonly ConfigSync configSync = new(pluginID)
+        {
+            DisplayName = pluginName,
+            CurrentVersion = pluginVersion,
+            MinimumRequiredVersion = pluginVersion
+        };
 
-        private static ConfigEntry<bool> modEnabled;
+        internal static ConfigEntry<bool> modEnabled;
         internal static ConfigEntry<bool> configLocked;
-        private static ConfigEntry<bool> loggingEnabled;
-        private static ConfigEntry<bool> allowSubstrings;
-        private static ConfigEntry<bool> removePinsWithoutSigns;
-        private static ConfigEntry<bool> stripHTMLTags;
+        internal static ConfigEntry<bool> loggingEnabled;
+        internal static ConfigEntry<bool> allowSubstrings;
+        internal static ConfigEntry<bool> removePinsWithoutSigns;
+        internal static ConfigEntry<bool> stripHTMLTags;
 
-        private static ConfigEntry<bool> useStringsList;
-        private static ConfigEntry<string> configFireList;
-        private static ConfigEntry<string> configBaseList;
-        private static ConfigEntry<string> configHammerList;
-        private static ConfigEntry<string> configPinList;
-        private static ConfigEntry<string> configPortalList;
+        internal static ConfigEntry<bool> useStringsList;
+        internal static ConfigEntry<string> configFireList;
+        internal static ConfigEntry<string> configBaseList;
+        internal static ConfigEntry<string> configHammerList;
+        internal static ConfigEntry<string> configPinList;
+        internal static ConfigEntry<string> configPortalList;
 
-        private static ConfigEntry<bool> useStringsPrefix;
-        private static ConfigEntry<string> configFirePrefix;
-        private static ConfigEntry<string> configBasePrefix;
-        private static ConfigEntry<string> configHammerPrefix;
-        private static ConfigEntry<string> configPinPrefix;
-        private static ConfigEntry<string> configPortalPrefix;
+        internal static ConfigEntry<bool> useStringsPrefix;
+        internal static ConfigEntry<string> configFirePrefix;
+        internal static ConfigEntry<string> configBasePrefix;
+        internal static ConfigEntry<string> configHammerPrefix;
+        internal static ConfigEntry<string> configPinPrefix;
+        internal static ConfigEntry<string> configPortalPrefix;
 
-        private static readonly HashSet<string> fireList = new HashSet<string>();
-        private static readonly HashSet<string> baseList = new HashSet<string>();
-        private static readonly HashSet<string> hammerList = new HashSet<string>();
-        private static readonly HashSet<string> pinList = new HashSet<string>();
-        private static readonly HashSet<string> portalList = new HashSet<string>();
+        internal static ConfigEntry<bool> useStringsSuffix;
+        internal static ConfigEntry<string> configFireSuffix;
+        internal static ConfigEntry<string> configBaseSuffix;
+        internal static ConfigEntry<string> configHammerSuffix;
+        internal static ConfigEntry<string> configPinSuffix;
+        internal static ConfigEntry<string> configPortalSuffix;
 
-        private static readonly HashSet<string> firePrefix = new HashSet<string>();
-        private static readonly HashSet<string> basePrefix = new HashSet<string>();
-        private static readonly HashSet<string> hammerPrefix = new HashSet<string>();
-        private static readonly HashSet<string> pinPrefix = new HashSet<string>();
-        private static readonly HashSet<string> portalPrefix = new HashSet<string>();
-
-
-        private static readonly HashSet<string> allpins = new HashSet<string>();
+        internal static ConfigEntry<bool> serverAuthoritativePins;
 
         private static AutoPinSigns instance;
 
         private void Awake()
         {
-            ConfigInit();
-
-            harmony.PatchAll();
-
             instance = this;
+            CustomConfigs.Awake();
+            ConfigInit();
+            SignPinParser.RebuildRules();
 
             _ = configSync.AddLockingConfigEntry(configLocked);
+            harmony.PatchAll();
 
+            InitCommands();
             Game.isModded = true;
+        }
+
+        private void FixedUpdate()
+        {
+            ServerPinSync.Tick();
+            LocalSignPins.Tick();
         }
 
         private void OnDestroy()
         {
+            ServerPinSync.ResetSession();
+            LocalSignPins.ClearStates();
+            harmony.UnpatchSelf();
             Config.Save();
-            harmony?.UnpatchSelf();
             instance = null;
         }
 
-        private static void LogInfo(object data)
+        internal static bool IsEnabled => modEnabled?.Value == true;
+
+        internal static bool IsAuthoritativeMode => IsEnabled && serverAuthoritativePins?.Value == true;
+
+        internal static bool IsUserPinType(PinType pinType) =>
+            pinType == PinType.Icon0 ||
+            pinType == PinType.Icon1 ||
+            pinType == PinType.Icon2 ||
+            pinType == PinType.Icon3 ||
+            pinType == PinType.Icon4;
+
+        internal static void LogInfo(object data)
         {
-            if (loggingEnabled.Value)
+            if (loggingEnabled?.Value == true && instance != null)
                 instance.Logger.LogInfo(data);
+        }
+
+        internal static void LogWarning(object data)
+        {
+            if (instance != null)
+                instance.Logger.LogWarning(data);
         }
 
         private ConfigDescription GetDescriptionSeparatedStrings(string description) =>
             Chainloader.PluginInfos.ContainsKey("_shudnal.ConfigurationManager")
-                    ? new ConfigDescription(description)
-                    : new ConfigDescription(description, null, new CustomConfigs.ConfigurationManagerAttributes { CustomDrawer = CustomConfigs.DrawSeparatedStrings(",") });
+                ? new ConfigDescription(description)
+                : new ConfigDescription(description, null, new CustomConfigs.ConfigurationManagerAttributes
+                {
+                    CustomDrawer = CustomConfigs.DrawSeparatedStrings(",")
+                });
 
         private void ConfigInit()
         {
-            modEnabled = config("General", "Enabled", defaultValue: true, "Enable the mod");
-            configLocked = config("General", "Lock Configuration", defaultValue: true, "Configuration is locked and can be changed by server admins only.");
-            loggingEnabled = config("General", "Logging enabled", defaultValue: false, "Enable logging. [Not Synced with Server]", false);
-            removePinsWithoutSigns = config("General", "Remove nearby map pins without related signs", defaultValue: false, "If enabled - if nearby pin has no related sign that pin will be removed from map.");
-            allowSubstrings = config("General", "Less strict string comparison", defaultValue: true, "Enable to create pins if the sign text contains any configured word instead of requiring an exact match.");
-            stripHTMLTags = config("General", "Strip HTML tags from text", defaultValue: true, "Should sign text be stripped of HTML tags before string comparison. Disable this is you want HTML prefixes.");
+            modEnabled = ConfigEntry("General", "Enabled", true, "Enable the mod.");
+            configLocked = ConfigEntry("General", "Lock Configuration", true, "Configuration is locked and can be changed by server administrators only.");
+            loggingEnabled = ConfigEntry("General", "Logging enabled", false, "Enable diagnostic logging. [Not synchronized with server]", synchronizedSetting: false);
+            removePinsWithoutSigns = ConfigEntry("General", "Remove nearby map pins without related signs", false,
+                "Remove saved user pins in the currently loaded zone when no matching sign exists near the pin. Disabled while server-authoritative pins are active.");
+            allowSubstrings = ConfigEntry("General", "Less strict string comparison", true,
+                "After exact list and explicit prefix/suffix matching, allow the longest configured list value to occur anywhere in the sign text.");
+            stripHTMLTags = ConfigEntry("General", "Strip HTML tags from text", true,
+                "Strip rich-text tags before matching and before creating the pin name. The original sign text is still preserved for editing.");
 
-            useStringsPrefix = config("Matching Mode", "Use prefix matching", defaultValue: true,
-                "If enabled, the mod checks whether sign text starts with a configured prefix (e.g. \"Pin: \"). " +
-                "Prefix text is NOT included in the pin name or visible sign text, but is preserved when editing the sign."
-            );
+            useStringsList = ConfigEntry("Matching Mode", "Use string list matching", true,
+                "First match exact full sign text against the configured lists; optionally use the longest partial list match after explicit prefixes and suffixes. The full processed sign text becomes the pin name.");
+            useStringsPrefix = ConfigEntry("Matching Mode", "Use prefix matching", true,
+                "Match explicit configured prefixes after exact list matching. Example: \"Pin: Boat\" creates a pin named \"Boat\". " +
+                $"Use the reserved token {SignPinParser.AnyPinToken} only as the final prefix fallback.");
+            useStringsSuffix = ConfigEntry("Matching Mode", "Use suffix matching", true,
+                "Match explicit configured suffixes after prefixes. Example: \"Boat here\" with suffix \"here\" creates a pin named \"Boat\". " +
+                $"Use the reserved token {SignPinParser.AnyPinToken} only as the final suffix fallback.");
 
-            useStringsList = config("Matching Mode", "Use string list matching", defaultValue: true,
-                "If enabled, the mod compares the full sign text against configured word lists. " +
-                "The full sign text becomes the pin name."
-            );
+            serverAuthoritativePins = ConfigEntry("Server Authoritative Pins", "Enabled", false,
+                "Use the server's complete sign-derived pin list as the only source of the five standard user pin types. " +
+                "WARNING: enabling this permanently removes all existing client pins using the Fire, Base, Hammer, Dot and Portal types. " +
+                "Those five types become an in-memory projection of the server snapshot and are not restored when this option is disabled. " +
+                "Pings, events, player pins, location pins and every other pin type are not changed.");
 
-            configFireList = config("Signs", "FireList", defaultValue: "fire", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Fire pin. Comma-separate each string."));
-            configBaseList = config("Signs", "BaseList", defaultValue: "base,shelter,home,house", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Base pin. Comma-separate each string."));
-            configHammerList = config("Signs", "HammerList", defaultValue: "hammer,crypt,mine,boss,cave", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Hammer pin. Comma-separate each string."));
-            configPinList = config("Signs", "PinList", defaultValue: "pin,dot,ore,vein,point", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Dot pin. Comma-separate each string."));
-            configPortalList = config("Signs", "PortalList", defaultValue: "portal", GetDescriptionSeparatedStrings("List of the case-insensitive strings to add Portal pin. Comma-separate each string."));
+            configFireList = ConfigEntry("Signs", "FireList", "fire", GetDescriptionSeparatedStrings("Case-insensitive words for Fire pins. Separate values with commas."));
+            configBaseList = ConfigEntry("Signs", "BaseList", "base,shelter,home,house", GetDescriptionSeparatedStrings("Case-insensitive words for Base pins. Separate values with commas."));
+            configHammerList = ConfigEntry("Signs", "HammerList", "hammer,crypt,mine,boss,cave", GetDescriptionSeparatedStrings("Case-insensitive words for Hammer pins. Separate values with commas."));
+            configPinList = ConfigEntry("Signs", "PinList", "pin,dot,ore,vein,point", GetDescriptionSeparatedStrings("Case-insensitive words for Dot pins. Separate values with commas."));
+            configPortalList = ConfigEntry("Signs", "PortalList", "portal", GetDescriptionSeparatedStrings("Case-insensitive words for Portal pins. Separate values with commas."));
 
-            configFireList.SettingChanged += ConfigList_SettingChanged;
-            configBaseList.SettingChanged += ConfigList_SettingChanged;
-            configHammerList.SettingChanged += ConfigList_SettingChanged;
-            configPinList.SettingChanged += ConfigList_SettingChanged;
-            configPortalList.SettingChanged += ConfigList_SettingChanged;
+            configFirePrefix = ConfigEntry("Signs - Prefixes", "Fire", "Fire:", GetDescriptionSeparatedStrings(PrefixDescription("Fire")));
+            configBasePrefix = ConfigEntry("Signs - Prefixes", "Base", "Base:", GetDescriptionSeparatedStrings(PrefixDescription("Base")));
+            configHammerPrefix = ConfigEntry("Signs - Prefixes", "Hammer", "Hammer:", GetDescriptionSeparatedStrings(PrefixDescription("Hammer")));
+            configPinPrefix = ConfigEntry("Signs - Prefixes", "Pin", "Pin:", GetDescriptionSeparatedStrings(PrefixDescription("Dot")));
+            configPortalPrefix = ConfigEntry("Signs - Prefixes", "Portal", "Portal:", GetDescriptionSeparatedStrings(PrefixDescription("Portal")));
 
-            configFirePrefix = config("Signs - Prefixes", "Fire", defaultValue: "Fire:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Fire pin and omit prefix symbols. Comma-separate each string."));
-            configBasePrefix = config("Signs - Prefixes", "Base", defaultValue: "Base:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Base pin and omit prefix symbols. Comma-separate each string."));
-            configHammerPrefix = config("Signs - Prefixes", "Hammer", defaultValue: "Hammer:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Hammer pin and omit prefix symbols. Comma-separate each string."));
-            configPinPrefix = config("Signs - Prefixes", "Pin", defaultValue: "Pin:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Dot pin and omit prefix symbols. Comma-separate each string."));
-            configPortalPrefix = config("Signs - Prefixes", "Portal", defaultValue: "Portal:", GetDescriptionSeparatedStrings("List of the case-insensitive prefixes to add Portal pin and omit prefix symbols. Comma-separate each string."));
+            configFireSuffix = ConfigEntry("Signs - Suffixes", "Fire", "", GetDescriptionSeparatedStrings(SuffixDescription("Fire")));
+            configBaseSuffix = ConfigEntry("Signs - Suffixes", "Base", "", GetDescriptionSeparatedStrings(SuffixDescription("Base")));
+            configHammerSuffix = ConfigEntry("Signs - Suffixes", "Hammer", "", GetDescriptionSeparatedStrings(SuffixDescription("Hammer")));
+            configPinSuffix = ConfigEntry("Signs - Suffixes", "Pin", "", GetDescriptionSeparatedStrings(SuffixDescription("Dot")));
+            configPortalSuffix = ConfigEntry("Signs - Suffixes", "Portal", "", GetDescriptionSeparatedStrings(SuffixDescription("Portal")));
 
-            configFirePrefix.SettingChanged += ConfigList_SettingChanged;
-            configBasePrefix.SettingChanged += ConfigList_SettingChanged;
-            configHammerPrefix.SettingChanged += ConfigList_SettingChanged;
-            configPinPrefix.SettingChanged += ConfigList_SettingChanged;
-            configPortalPrefix.SettingChanged += ConfigList_SettingChanged;
+            modEnabled.SettingChanged += OnModeSettingChanged;
+            serverAuthoritativePins.SettingChanged += OnModeSettingChanged;
+            removePinsWithoutSigns.SettingChanged += OnCleanupSettingChanged;
 
-            UpdatePinLists();
+            allowSubstrings.SettingChanged += OnMatchingSettingChanged;
+            stripHTMLTags.SettingChanged += OnMatchingSettingChanged;
+            useStringsList.SettingChanged += OnMatchingSettingChanged;
+            useStringsPrefix.SettingChanged += OnMatchingSettingChanged;
+            useStringsSuffix.SettingChanged += OnMatchingSettingChanged;
 
-            InitCommands();
+            configFireList.SettingChanged += OnMatchingSettingChanged;
+            configBaseList.SettingChanged += OnMatchingSettingChanged;
+            configHammerList.SettingChanged += OnMatchingSettingChanged;
+            configPinList.SettingChanged += OnMatchingSettingChanged;
+            configPortalList.SettingChanged += OnMatchingSettingChanged;
+
+            configFirePrefix.SettingChanged += OnMatchingSettingChanged;
+            configBasePrefix.SettingChanged += OnMatchingSettingChanged;
+            configHammerPrefix.SettingChanged += OnMatchingSettingChanged;
+            configPinPrefix.SettingChanged += OnMatchingSettingChanged;
+            configPortalPrefix.SettingChanged += OnMatchingSettingChanged;
+
+            configFireSuffix.SettingChanged += OnMatchingSettingChanged;
+            configBaseSuffix.SettingChanged += OnMatchingSettingChanged;
+            configHammerSuffix.SettingChanged += OnMatchingSettingChanged;
+            configPinSuffix.SettingChanged += OnMatchingSettingChanged;
+            configPortalSuffix.SettingChanged += OnMatchingSettingChanged;
         }
 
-        ConfigEntry<T> config<T>(string group, string name, T defaultValue, ConfigDescription description, bool synchronizedSetting = true)
+        private static string PrefixDescription(string pinName) =>
+            $"Case-insensitive prefixes for {pinName} pins. The matched prefix is omitted from the pin name and visible sign text. " +
+            $"Separate values with commas. Use {SignPinParser.AnyPinToken} to match any non-empty sign text.";
+
+        private static string SuffixDescription(string pinName) =>
+            $"Case-insensitive suffixes for {pinName} pins. The matched suffix is omitted from the pin name and visible sign text. " +
+            $"Separate values with commas. Use {SignPinParser.AnyPinToken} to match any non-empty sign text.";
+
+        private ConfigEntry<T> ConfigEntry<T>(string group, string name, T defaultValue, ConfigDescription description, bool synchronizedSetting = true)
         {
-            ConfigEntry<T> configEntry = Config.Bind(group, name, defaultValue, description);
-
-            SyncedConfigEntry<T> syncedConfigEntry = configSync.AddConfigEntry(configEntry);
-            syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
-
-            return configEntry;
+            ConfigEntry<T> entry = Config.Bind(group, name, defaultValue, description);
+            SyncedConfigEntry<T> syncedEntry = configSync.AddConfigEntry(entry);
+            syncedEntry.SynchronizedConfig = synchronizedSetting;
+            return entry;
         }
 
-        ConfigEntry<T> config<T>(string group, string name, T defaultValue, string description, bool synchronizedSetting = true) => config(group, name, defaultValue, new ConfigDescription(description), synchronizedSetting);
+        private ConfigEntry<T> ConfigEntry<T>(string group, string name, T defaultValue, string description, bool synchronizedSetting = true) =>
+            ConfigEntry(group, name, defaultValue, new ConfigDescription(description), synchronizedSetting);
 
-        private void ConfigList_SettingChanged(object sender, EventArgs e) => UpdatePinLists();
-
-        private static void UpdatePinLists()
+        private static void OnMatchingSettingChanged(object sender, EventArgs args)
         {
-            AddToHS(configFireList.Value, fireList);
-            AddToHS(configBaseList.Value, baseList);
-            AddToHS(configHammerList.Value, hammerList);
-            AddToHS(configPinList.Value, pinList);
-            AddToHS(configPortalList.Value, portalList);
-
-            allpins.Clear();
-            allpins.UnionWith(fireList);
-            allpins.UnionWith(baseList);
-            allpins.UnionWith(hammerList);
-            allpins.UnionWith(pinList);
-            allpins.UnionWith(portalList);
-
-            AddToHS(configFirePrefix.Value, firePrefix);
-            AddToHS(configBasePrefix.Value, basePrefix);
-            AddToHS(configHammerPrefix.Value, hammerPrefix);
-            AddToHS(configPinPrefix.Value, pinPrefix);
-            AddToHS(configPortalPrefix.Value, portalPrefix);
-
-            signStates.Do(kvp => kvp.Value.UpdateMapPin());
+            SignPinParser.RebuildRules();
+            LocalSignPins.RefreshAll();
+            ServerPinSync.MarkDirty();
         }
 
-        static void AddToHS(string text, HashSet<string> hashSet)
-        {
-            hashSet.Clear();
-            hashSet.UnionWith(text.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(entry => entry.ToLower().Trim()));
-        }
+        private static void OnModeSettingChanged(object sender, EventArgs args) => ServerPinSync.OnModeChanged();
 
-        public static void InitCommands()
+        private static void OnCleanupSettingChanged(object sender, EventArgs args) => LocalSignPins.InvalidateCleanupZone();
+
+        private static void InitCommands()
         {
-            new Terminal.ConsoleCommand($"{typeof(AutoPinSigns).Namespace.ToLower()}", "[action]", delegate (Terminal.ConsoleEventArgs args)
-            {
-                if (!modEnabled.Value)
+            _ = new Terminal.ConsoleCommand(
+                typeof(AutoPinSigns).Namespace.ToLowerInvariant(),
+                "clear [range] | status | resync",
+                args =>
                 {
-                    args.Context.AddString("Mod disabled");
-                    return;
-                }
-
-                if (!Player.m_localPlayer)
-                    return;
-
-                if (args.Args.Length >= 2 && args.Args[1] == "clear")
-                    while (FindAndDeleteClosestPin(Player.m_localPlayer.transform.position, args.Args.Length > 2 && float.TryParse(args.Args[2], out float j) ? j : 0)) { }
-                else
-                    args.Context.AddString($"Syntax: {typeof(AutoPinSigns).Namespace.ToLower()} [action]");
-
-            }, isCheat: false, isNetwork: false, onlyServer: false, isSecret: false, allowInDevBuild: false, () => new List<string>() { "clear [range] -  Clear closest to current player pins in set range. Default 5" }, alwaysRefreshTabOptions: true, remoteCommand: false);
-
-            static bool FindAndDeleteClosestPin(Vector3 pos, float distance = 5.0f)
-            {
-                if (Minimap.instance)
-                {
-                    foreach (PinData pin in Minimap.instance.m_pins)
+                    if (args.Args.Length < 2)
                     {
-                        if (Utils.DistanceXZ(pos, pin.m_pos) < distance)
-                        {
-                            Minimap.instance.RemovePin(pin);
-                            return true;
-                        }
+                        PrintCommandSyntax(args);
+                        return;
                     }
-                }
 
-                return false;
-            }
-        }
+                    switch (args.Args[1].ToLowerInvariant())
+                    {
+                        case "clear":
+                            if (!IsEnabled)
+                            {
+                                args.Context.AddString("Auto Pin Signs is disabled.");
+                                return;
+                            }
 
-        private static bool IsAutoPinIcon(PinType pinType) => pinType == PinType.Icon0
-                                                   || pinType == PinType.Icon1
-                                                   || pinType == PinType.Icon2
-                                                   || pinType == PinType.Icon3
-                                                   || pinType == PinType.Icon4;
+                            if (ServerPinSync.HasActiveAuthority)
+                            {
+                                args.Context.AddString("Saved user pins are controlled by the server in authoritative mode.");
+                                return;
+                            }
 
-        private static readonly List<Piece> tempPieces = new List<Piece>();
-        private static Vector2i currentZone = Vector2i.zero;
+                            if (!Player.m_localPlayer)
+                            {
+                                args.Context.AddString("The clear command requires a local player and map.");
+                                return;
+                            }
 
-        void FixedUpdate()
-        {
-            if (!(modEnabled.Value && removePinsWithoutSigns.Value))
-                return;
+                            float range = 5f;
+                            if (args.Args.Length > 2 && !TryParseFloat(args.Args[2], out range))
+                            {
+                                args.Context.AddString("Invalid range.");
+                                return;
+                            }
 
-            if (!ZNet.instance)
-                return;
+                            range = Mathf.Max(0f, range);
+                            int removed = RemoveSavedUserPins(Player.m_localPlayer.transform.position, range);
+                            args.Context.AddString($"Removed {removed} saved user pin(s) within {range:0.##} meters.");
+                            break;
 
-            if (currentZone == (currentZone = ZoneSystem.GetZone(ZNet.instance.GetReferencePosition())))
-                return;
-            
-            if (!Minimap.instance || !IsCurrentZoneActive())
-                return;
+                        case "status":
+                            args.Context.AddString(ServerPinSync.GetStatusText());
+                            break;
 
-            foreach (PinData pin in Minimap.instance.m_pins.Where(IsPinToRemove).ToList())
-            {
-                LogInfo($"Removed map pin without sign: \"{pin.m_name}\" {pin.m_icon?.name} {pin.m_pos}");
-                Minimap.instance.RemovePin(pin);
-            }
-        }
+                        case "resync":
+                            args.Context.AddString(ServerPinSync.ForceResync());
+                            break;
 
-        private static bool IsPinToRemove(PinData pin)
-        {
-            if (pin.m_ownerID == 0L && pin.m_save && IsAutoPinIcon(pin.m_type) && currentZone == ZoneSystem.GetZone(pin.m_pos))
-            {
-                tempPieces.Clear();
-                Piece.GetAllPiecesInRadius(pin.m_pos, 1f, tempPieces);
-                return !tempPieces.Any(pieceStates.ContainsKey);
-            }
-
-            return false;
-        }
-
-        private static bool IsCurrentZoneActive() => ZoneSystem.instance && ZoneSystem.instance.IsZoneLoaded(currentZone) && ZoneSystem.instance.m_zones.TryGetValue(currentZone, out var zoneData) && zoneData.m_ttl <= 0.1f;
-
-        public static readonly Dictionary<Sign, SignState> signStates = new Dictionary<Sign, SignState>();
-        public static readonly Dictionary<Piece, SignState> pieceStates = new Dictionary<Piece, SignState>();
-        public static readonly Dictionary<WearNTear, SignState> wntStates = new Dictionary<WearNTear, SignState>();
-
-        [HarmonyPatch(typeof(Sign), nameof(Sign.OnCheckPermissionCompleted))]
-        public static class Sign_OnCheckPermissionCompleted_UpdateSignState
-        {
-            public static void Postfix(Sign __instance)
-            {
-                if (!modEnabled.Value)
-                    return;
-
-                SignState.UpdatePinState(__instance);
-            }
-        }
-
-        [HarmonyPatch(typeof(Sign), nameof(Sign.GetText))]
-        public static class Sign_GetText_GetFullText
-        {
-            [HarmonyPriority(Priority.First)]
-            public static void Postfix(Sign __instance, ref string __result)
-            {
-                if (!modEnabled.Value)
-                    return;
-
-                if (signStates.TryGetValue(__instance, out SignState state))
-                    __result = state.m_rawText;
-            }
-        }
-
-        [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.Destroy))]
-        public static class WearNTear_Destroy_RemoveAddedPin
-        {
-            public static void Prefix(WearNTear __instance)
-            {
-                if (wntStates.TryGetValue(__instance, out SignState signState))
-                    signState.RemoveMapPin();
-            }
-        }
-
-        [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.OnDestroy))]
-        public static class WearNTear_OnDestroy_RemoveSignState
-        {
-            public static void Prefix(WearNTear __instance)
-            {
-                if (wntStates.TryGetValue(__instance, out SignState signState))
+                        default:
+                            PrintCommandSyntax(args);
+                            break;
+                    }
+                },
+                isCheat: false,
+                isNetwork: false,
+                onlyServer: false,
+                isSecret: false,
+                allowInDevBuild: false,
+                () => new List<string>
                 {
-                    signStates.Remove(signState.m_sign);
-                    pieceStates.Remove(signState.m_piece);
-                    wntStates.Remove(signState.m_wnt);
-                }
-            }
+                    "clear [range] - remove saved standard user pins near the player (default range: 5)",
+                    "status - show synchronization status",
+                    "resync - refresh local pins or request/rebuild the authoritative list"
+                },
+                alwaysRefreshTabOptions: true,
+                remoteCommand: false);
         }
 
-        [HarmonyPatch(typeof(ZoneSystem), nameof(ZoneSystem.OnDestroy))]
-        public static class ZoneSystem_OnDestroy_Clear
+        private static void PrintCommandSyntax(Terminal.ConsoleEventArgs args) =>
+            args.Context.AddString("Syntax: autopinsigns clear [range] | status | resync");
+
+        private static bool TryParseFloat(string value, out float result) =>
+            float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out result) ||
+            float.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out result);
+
+        private static int RemoveSavedUserPins(Vector3 position, float range)
         {
-            public static void Prefix()
+            if (!Minimap.instance)
+                return 0;
+
+            int removed = 0;
+            List<PinData> pins = Minimap.instance.m_pins;
+            for (int i = pins.Count - 1; i >= 0; --i)
             {
-                signStates.Clear();
-                pieceStates.Clear();
-                wntStates.Clear();
+                PinData pin = pins[i];
+                if (!pin.m_save || !IsUserPinType(pin.m_type) || Utils.DistanceXZ(position, pin.m_pos) >= range)
+                    continue;
+
+                Minimap.instance.RemovePin(pin);
+                ++removed;
             }
+
+            return removed;
         }
     }
 }

@@ -43,6 +43,10 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_utils.dll</HintPath>
     </Reference>
+    <Reference Include="assembly_guiutils, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_guiutils.dll</HintPath>
+    </Reference>
     <Reference Include="assembly_valheim, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_valheim.dll</HintPath>
@@ -85,6 +89,7 @@
     <Compile Include="CustomConfigs.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SignPinParser.cs" />
+    <Compile Include="SignPinMetadata.cs" />
     <Compile Include="LocalSignPins.cs" />
     <Compile Include="ServerPinSync.cs" />
   </ItemGroup>

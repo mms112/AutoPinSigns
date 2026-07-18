@@ -1,7 +1,10 @@
 # 2.0.0
 * new feature: Sign Suffixes. The same as Sign Prefixes but useful for languages with different word orders.
 * new mode: Server Authoritative Pins. The server maintains one shared pin list from matching signs throughout the world and updates connected clients in real time. Pins appear when another player places or edits a pinned sign, without opening the map, using a cartography table, visiting the sign or loading its area.
-* migration to ConditionalConfigSync
+* added configurable authoritative pin types, optional administrator-only sign publishing and deterministic merging of identical nearby pins.
+* server-authoritative pins preserve existing client pins in the player profile. Client pins are temporarily hidden while controlled and return when server authority or the corresponding controlled type is inactive.
+* added optional checked sign pins. Use Shift + E on a recognized pinned sign to cross it off; checked state is synchronized in server-authoritative mode.
+* migrated config synchronization to ConditionalConfigSync.
 
 # 1.2.0
 * configs will now be synced from server to clients if mod is installed on a server

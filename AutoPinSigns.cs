@@ -11,6 +11,18 @@ using static Minimap;
 
 namespace AutoPinSigns
 {
+    [Flags]
+    internal enum AuthoritativePinTypes
+    {
+        None = 0,
+        Fire = 1 << 0,
+        Base = 1 << 1,
+        Hammer = 1 << 2,
+        Dot = 1 << 3,
+        Portal = 1 << 4,
+        All = Fire | Base | Hammer | Dot | Portal
+    }
+
     [BepInPlugin(pluginID, pluginName, pluginVersion)]
     [BepInDependency("_shudnal.ConditionalConfigSync", BepInDependency.DependencyFlags.HardDependency)]
     public sealed class AutoPinSigns : BaseUnityPlugin
@@ -57,6 +69,10 @@ namespace AutoPinSigns
         internal static ConfigEntry<string> configPortalSuffix;
 
         internal static ConfigEntry<bool> serverAuthoritativePins;
+        internal static ConfigEntry<AuthoritativePinTypes> serverAuthoritativePinTypes;
+        internal static ConfigEntry<bool> serverAuthoritativeAdminsOnly;
+        internal static ConfigEntry<float> serverAuthoritativeMergeDistance;
+        internal static ConfigEntry<bool> allowCheckedPinStatus;
 
         private static AutoPinSigns instance;
 
@@ -100,6 +116,22 @@ namespace AutoPinSigns
             pinType == PinType.Icon3 ||
             pinType == PinType.Icon4;
 
+        internal static AuthoritativePinTypes GetPinTypeFlag(PinType pinType) => pinType switch
+        {
+            PinType.Icon0 => AuthoritativePinTypes.Fire,
+            PinType.Icon1 => AuthoritativePinTypes.Base,
+            PinType.Icon2 => AuthoritativePinTypes.Hammer,
+            PinType.Icon3 => AuthoritativePinTypes.Dot,
+            PinType.Icon4 => AuthoritativePinTypes.Portal,
+            _ => AuthoritativePinTypes.None
+        };
+
+        internal static AuthoritativePinTypes GetConfiguredAuthoritativePinTypes() =>
+            (serverAuthoritativePinTypes?.Value ?? AuthoritativePinTypes.All) & AuthoritativePinTypes.All;
+
+        internal static bool IsPinTypeEnabled(AuthoritativePinTypes types, PinType pinType) =>
+            (types & GetPinTypeFlag(pinType)) != 0;
+
         internal static void LogInfo(object data)
         {
             if (loggingEnabled?.Value == true && instance != null)
@@ -126,11 +158,13 @@ namespace AutoPinSigns
             configLocked = ConfigEntry("General", "Lock Configuration", true, "Configuration is locked and can be changed by server administrators only.");
             loggingEnabled = ConfigEntry("General", "Logging enabled", false, "Enable diagnostic logging. [Not synchronized with server]", synchronizedSetting: false);
             removePinsWithoutSigns = ConfigEntry("General", "Remove nearby map pins without related signs", false,
-                "Remove saved user pins in the currently loaded zone when no matching sign exists near the pin. Disabled while server-authoritative pins are active.");
+                "Remove saved user pins in the currently loaded zone when no matching sign exists near the pin. Server-controlled pin types are never handled by this cleanup.");
             allowSubstrings = ConfigEntry("General", "Less strict string comparison", true,
                 "After exact list and explicit prefix/suffix matching, allow the longest configured list value to occur anywhere in the sign text.");
             stripHTMLTags = ConfigEntry("General", "Strip HTML tags from text", true,
                 "Strip rich-text tags before matching and before creating the pin name. The original sign text is still preserved for editing.");
+            allowCheckedPinStatus = ConfigEntry("General", "Allow checked pin status", true,
+                "Allow Shift + E on a recognized pinned sign to toggle its checked status. The state is stored in the sign ZDO and synchronized with authoritative pins.");
 
             useStringsList = ConfigEntry("Matching Mode", "Use string list matching", true,
                 "First match exact full sign text against the configured lists; optionally use the longest partial list match after explicit prefixes and suffixes. The full processed sign text becomes the pin name.");
@@ -142,10 +176,19 @@ namespace AutoPinSigns
                 $"Use the reserved token {SignPinParser.AnyPinToken} only as the final suffix fallback.");
 
             serverAuthoritativePins = ConfigEntry("Server Authoritative Pins", "Enabled", false,
-                "Use the server's complete sign-derived pin list as the only source of the five standard user pin types. " +
-                "WARNING: enabling this permanently removes all existing client pins using the Fire, Base, Hammer, Dot and Portal types. " +
-                "Those five types become an in-memory projection of the server snapshot and are not restored when this option is disabled. " +
+                "Use the server's sign-derived pin list as the authoritative source for selected standard user pin types. " +
+                "Existing client pins using controlled types are temporarily hidden but remain unchanged in the player profile. " +
+                "They return when server authority or the corresponding controlled type is disabled. Server pins are not saved to the player profile. " +
                 "Pings, events, player pins, location pins and every other pin type are not changed.");
+            serverAuthoritativePinTypes = ConfigEntry("Server Authoritative Pins", "Controlled pin types", AuthoritativePinTypes.All,
+                "Standard user pin types displayed from the server snapshot while authority is active. Types not selected remain client-controlled.");
+            serverAuthoritativeAdminsOnly = ConfigEntry("Server Authoritative Pins", "Only administrator signs", false,
+                "Only publish signs whose stored author is present in the server administrator list. Host-authored signs are allowed.");
+            serverAuthoritativeMergeDistance = ConfigEntry("Server Authoritative Pins", "Merge identical pins within distance", 0f,
+                new ConfigDescription(
+                    "Merge pins with the same parsed type and name when they are within this horizontal distance in meters. " +
+                    "Candidates are ordered by ZDOID and the first one is retained. Set to 0 to disable merging.",
+                    new AcceptableValueRange<float>(0f, 1000f)));
 
             configFireList = ConfigEntry("Signs", "FireList", "fire", GetDescriptionSeparatedStrings("Case-insensitive words for Fire pins. Separate values with commas."));
             configBaseList = ConfigEntry("Signs", "BaseList", "base,shelter,home,house", GetDescriptionSeparatedStrings("Case-insensitive words for Base pins. Separate values with commas."));
@@ -167,6 +210,10 @@ namespace AutoPinSigns
 
             modEnabled.SettingChanged += OnModeSettingChanged;
             serverAuthoritativePins.SettingChanged += OnModeSettingChanged;
+            serverAuthoritativePinTypes.SettingChanged += OnAuthoritativeSettingChanged;
+            serverAuthoritativeAdminsOnly.SettingChanged += OnAuthoritativeSettingChanged;
+            serverAuthoritativeMergeDistance.SettingChanged += OnAuthoritativeSettingChanged;
+            allowCheckedPinStatus.SettingChanged += OnCheckedStatusSettingChanged;
             removePinsWithoutSigns.SettingChanged += OnCleanupSettingChanged;
 
             allowSubstrings.SettingChanged += OnMatchingSettingChanged;
@@ -222,6 +269,18 @@ namespace AutoPinSigns
 
         private static void OnModeSettingChanged(object sender, EventArgs args) => ServerPinSync.OnModeChanged();
 
+        private static void OnAuthoritativeSettingChanged(object sender, EventArgs args)
+        {
+            LocalSignPins.RefreshAll();
+            ServerPinSync.OnAuthoritativeSettingsChanged();
+        }
+
+        private static void OnCheckedStatusSettingChanged(object sender, EventArgs args)
+        {
+            LocalSignPins.RefreshAll();
+            ServerPinSync.MarkDirty(immediate: true);
+        }
+
         private static void OnCleanupSettingChanged(object sender, EventArgs args) => LocalSignPins.InvalidateCleanupZone();
 
         private static void InitCommands()
@@ -243,12 +302,6 @@ namespace AutoPinSigns
                             if (!IsEnabled)
                             {
                                 args.Context.AddString("Auto Pin Signs is disabled.");
-                                return;
-                            }
-
-                            if (ServerPinSync.HasActiveAuthority)
-                            {
-                                args.Context.AddString("Saved user pins are controlled by the server in authoritative mode.");
                                 return;
                             }
 
@@ -315,7 +368,7 @@ namespace AutoPinSigns
             for (int i = pins.Count - 1; i >= 0; --i)
             {
                 PinData pin = pins[i];
-                if (!pin.m_save || !IsUserPinType(pin.m_type) || Utils.DistanceXZ(position, pin.m_pos) >= range)
+                if (!pin.m_save || !IsUserPinType(pin.m_type) || ServerPinSync.ControlsPinType(pin.m_type) || Utils.DistanceXZ(position, pin.m_pos) >= range)
                     continue;
 
                 Minimap.instance.RemovePin(pin);

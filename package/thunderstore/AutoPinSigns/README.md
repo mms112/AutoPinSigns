@@ -17,22 +17,59 @@ Configuration is synchronized from the server when the mod is installed there.
 - Supports rich-text signs and optional rich-text tag stripping.
 - Updates or removes local pins when a loaded sign changes or is destroyed.
 - Can remove nearby saved user pins that no longer have a matching loaded sign.
+- Can cross off recognized sign pins with `Shift + E` and show `(x)` on checked signs.
 - In server-authoritative mode, pins from distant signs appear for every connected client as soon as the server processes the change, without opening the map or using a cartography table.
 - Provides `autopinsigns clear [range]`, `autopinsigns status` and `autopinsigns resync` console commands.
 
 ## Server-authoritative pins
 
-Enable `Server Authoritative Pins / Enabled` on the server to use the server's complete sign-derived list instead of local discovery.
+Enable `Server Authoritative Pins / Enabled` on the server to use the server's sign-derived list for selected standard user pin types.
 
-The server detects signs throughout the world, updates the shared list when their parsed pin data changes and sends the current list when a client connects or requests resynchronization. Updates are live: if another player places, edits or removes a pinned sign far away, the corresponding pin is updated for connected clients without them opening the map, touching a cartography table, visiting the sign or loading its area. This is the main usability advantage over local sign discovery.
+The server detects signs throughout the world, updates the shared list when their parsed pin data or checked state changes and sends the current list when a client connects or requests resynchronization. Updates are live: if another player places, edits, checks, unchecks or removes a pinned sign far away, the corresponding pin is updated for connected clients without them opening the map, touching a cartography table, visiting the sign or loading its area. This is the main usability advantage over local sign discovery.
+
+### Controlled pin types
+
+`Server Authoritative Pins / Controlled pin types` is a flags setting. Select any combination of Fire, Base, Hammer, Dot and Portal. The default is `All`.
+
+Only selected types are replaced by the server snapshot. Types not selected remain client-controlled and continue to support ordinary local and sign-derived pins.
 
 > **Warning**
 >
-> Enabling server-authoritative pins permanently removes every client pin using the five standard Fire, Base, Hammer, Dot and Portal types. The mod does not back up or restore those pins when the option is later disabled.
+> Enabling server-authoritative pins temporarily hides existing client pins using the selected controlled types. They remain saved in the player profile and return when authoritative mode or the corresponding controlled type is disabled. Server pins are displayed as a runtime overlay and are not saved to the player profile.
 >
 > Map pings, events, players, locations, deaths and every other pin type are not removed or synchronized.
 
-While authoritative mode is active, the five standard user pin types always reflect the server list. Creating local pins of those types is disabled.
+While authoritative mode is active, selected user pin types always reflect the server list. Creating local pins of those types is disabled; non-selected user pin types remain available.
+
+### Administrator-only signs
+
+Enable `Server Authoritative Pins / Only administrator signs` to publish only matching signs authored by members of the Valheim server administrator list. Host-authored signs are accepted. Signs with an unknown or non-administrator author are ignored by the shared list.
+
+This controls publication only and does not change normal game permissions for placing or editing signs.
+
+### Merging nearby duplicates
+
+Set `Server Authoritative Pins / Merge identical pins within distance` above `0` to merge nearby pins that have:
+
+- the same parsed pin type;
+- the same final pin name after prefixes and suffixes are removed;
+- a horizontal distance no greater than the configured number of meters.
+
+Candidates are ordered by ZDOID and the first one is retained, making the result deterministic. The retained sign supplies the pin position and checked state. A value of `0` disables merging.
+
+## Checked pin signs
+
+Enable `General / Allow checked pin status`, look at a recognized pinned sign and press `Shift + E`. The hover text displays the game's `$hud_crossoffpin` command only for signs that currently resolve to a pin.
+
+- Normal `E` still opens the sign editor.
+- Standard ward/private-area access is required.
+- A checked sign begins with `(x)` followed by its parsed visible pin name.
+- The original sign text is preserved for editing.
+- Local mode updates the local map pin when the sign is loaded.
+- Server-authoritative mode distributes the checked state in the live server snapshot, so every connected client sees the same crossed-off pin.
+- Disabling the option hides checked state without deleting it; enabling it again restores the stored status.
+
+Checked state does not change matching or duplicate identity. When duplicate merging is enabled, the retained first ZDOID sign determines the resulting pin's checked state.
 
 ## Matching priority
 
@@ -73,11 +110,11 @@ If several pin types contain `anyPin`, the first type in Fire, Base, Hammer, Dot
 
 ## Console commands
 
-- `autopinsigns clear [range]` — removes saved standard user pins near the player. Default range: 5 meters. Disabled in authoritative mode.
-- `autopinsigns status` — prints the active mode, revision and pin counts.
+- `autopinsigns clear [range]` — removes saved standard user pins near the player. Default range: 5 meters. Server-controlled types are skipped.
+- `autopinsigns status` — prints the active mode, revision, controlled types and pin counts.
 - `autopinsigns resync` — rebuilds the server list or requests the current server snapshot.
 
-## Configurating
+## Configuring
 The best way to handle configs is [Configuration Manager](https://thunderstore.io/c/valheim/p/shudnal/ConfigurationManager/).
 
 Or [Official BepInEx Configuration Manager](https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationManager/).

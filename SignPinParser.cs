@@ -21,6 +21,7 @@ namespace AutoPinSigns
     internal static class SignPinParser
     {
         internal const string AnyPinToken = "anyPin";
+        internal static int RulesSignature { get; private set; }
 
         private sealed class RuleSet
         {
@@ -57,6 +58,7 @@ namespace AutoPinSigns
             SetRules(rules[2], configHammerList.Value, configHammerPrefix.Value, configHammerSuffix.Value);
             SetRules(rules[3], configPinList.Value, configPinPrefix.Value, configPinSuffix.Value);
             SetRules(rules[4], configPortalList.Value, configPortalPrefix.Value, configPortalSuffix.Value);
+            RulesSignature = CalculateRulesSignature();
         }
 
         internal static bool TryParse(string rawText, out SignPinMatch match)
@@ -217,6 +219,44 @@ namespace AutoPinSigns
             type = PinType.None;
             return false;
         }
+
+
+        private static int CalculateRulesSignature()
+        {
+            unchecked
+            {
+                int hash = 17;
+                AddHash(ref hash, useStringsList.Value);
+                AddHash(ref hash, useStringsPrefix.Value);
+                AddHash(ref hash, useStringsSuffix.Value);
+                AddHash(ref hash, allowSubstrings.Value);
+                AddHash(ref hash, stripHTMLTags.Value);
+
+                AddHash(ref hash, configFireList.Value);
+                AddHash(ref hash, configBaseList.Value);
+                AddHash(ref hash, configHammerList.Value);
+                AddHash(ref hash, configPinList.Value);
+                AddHash(ref hash, configPortalList.Value);
+
+                AddHash(ref hash, configFirePrefix.Value);
+                AddHash(ref hash, configBasePrefix.Value);
+                AddHash(ref hash, configHammerPrefix.Value);
+                AddHash(ref hash, configPinPrefix.Value);
+                AddHash(ref hash, configPortalPrefix.Value);
+
+                AddHash(ref hash, configFireSuffix.Value);
+                AddHash(ref hash, configBaseSuffix.Value);
+                AddHash(ref hash, configHammerSuffix.Value);
+                AddHash(ref hash, configPinSuffix.Value);
+                AddHash(ref hash, configPortalSuffix.Value);
+                return hash;
+            }
+        }
+
+        private static void AddHash(ref int hash, bool value) => hash = hash * 31 + (value ? 1 : 0);
+
+        private static void AddHash(ref int hash, string value) =>
+            hash = hash * 31 + (value ?? string.Empty).GetStableHashCode();
 
         private static void SetRules(RuleSet rule, string list, string prefixes, string suffixes)
         {

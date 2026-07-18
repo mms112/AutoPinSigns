@@ -2,6 +2,7 @@
 using Splatform;
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using UnityEngine;
 using static AutoPinSigns.AutoPinSigns;
@@ -11,7 +12,7 @@ namespace AutoPinSigns
 {
     internal static class ServerPinSync
     {
-        private const int ProtocolVersion = 1;
+        private const int ProtocolVersion = 2;
         private const int MaximumReceivedPins = 100000;
         private const float RebuildDelaySeconds = 0.35f;
         private const float InitialRequestDelaySeconds = 0.5f;
@@ -30,14 +31,16 @@ namespace AutoPinSigns
             internal readonly Vector3 Position;
             internal readonly PinType Type;
             internal readonly string Name;
+            internal readonly bool Checked;
             internal readonly long Creator;
             internal readonly string Author;
 
-            internal ServerPin(Vector3 position, PinType type, string name, long creator, string author)
+            internal ServerPin(Vector3 position, PinType type, string name, bool isChecked, long creator, string author)
             {
                 Position = position;
                 Type = type;
                 Name = name ?? string.Empty;
+                Checked = isChecked;
                 Creator = creator;
                 Author = author ?? string.Empty;
             }
@@ -46,8 +49,45 @@ namespace AutoPinSigns
                 Position == other.Position &&
                 Type == other.Type &&
                 Name == other.Name &&
+                Checked == other.Checked &&
                 Creator == other.Creator &&
                 Author == other.Author;
+        }
+
+        private readonly struct ServerPinCandidate
+        {
+            internal readonly string ZdoId;
+            internal readonly ServerPin Pin;
+
+            internal ServerPinCandidate(string zdoId, ServerPin pin)
+            {
+                ZdoId = zdoId ?? string.Empty;
+                Pin = pin;
+            }
+        }
+
+        private readonly struct PinIdentity : IEquatable<PinIdentity>
+        {
+            private readonly PinType type;
+            private readonly string name;
+
+            internal PinIdentity(PinType type, string name)
+            {
+                this.type = type;
+                this.name = name ?? string.Empty;
+            }
+
+            public bool Equals(PinIdentity other) => type == other.type && name == other.name;
+
+            public override bool Equals(object obj) => obj is PinIdentity other && Equals(other);
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    return ((int)type * 397) ^ name.GetHashCode();
+                }
+            }
         }
 
         private sealed class PinDataReferenceComparer : IEqualityComparer<PinData>
@@ -57,6 +97,12 @@ namespace AutoPinSigns
             public bool Equals(PinData left, PinData right) => ReferenceEquals(left, right);
 
             public int GetHashCode(PinData value) => RuntimeHelpers.GetHashCode(value);
+        }
+
+        private sealed class MapDataPinSwapState
+        {
+            internal readonly List<PinData> RemovedAuthoritativePins = new();
+            internal readonly List<PinData> AddedClientPins = new();
         }
 
         private sealed class ServerPinComparer : IComparer<ServerPin>
@@ -75,10 +121,21 @@ namespace AutoPinSigns
                 if (result != 0) return result;
                 result = string.CompareOrdinal(left.Name, right.Name);
                 if (result != 0) return result;
+                result = left.Checked.CompareTo(right.Checked);
+                if (result != 0) return result;
                 result = left.Creator.CompareTo(right.Creator);
                 if (result != 0) return result;
                 return string.CompareOrdinal(left.Author, right.Author);
             }
+        }
+
+
+        private sealed class ServerPinCandidateComparer : IComparer<ServerPinCandidate>
+        {
+            internal static readonly ServerPinCandidateComparer Instance = new();
+
+            public int Compare(ServerPinCandidate left, ServerPinCandidate right) =>
+                string.CompareOrdinal(left.ZdoId, right.ZdoId);
         }
 
         private static readonly HashSet<int> signPrefabHashes = new() { "sign".GetStableHashCode() };
@@ -87,10 +144,17 @@ namespace AutoPinSigns
 
         private static readonly List<ServerPin> authoritativePins = new();
         private static readonly List<ServerPin> rebuiltPins = new();
+        private static readonly List<ServerPinCandidate> candidatePins = new();
+        private static readonly Dictionary<PinIdentity, List<ServerPin>> mergedPinGroups = new();
         private static readonly List<ServerPin> receivedPins = new();
         private static readonly List<PinData> appliedPins = new();
         private static readonly HashSet<PinData> appliedPinSet = new(PinDataReferenceComparer.Instance);
+        private static readonly List<PinData> hiddenClientPins = new();
+        private static readonly HashSet<PinData> hiddenClientPinSet = new(PinDataReferenceComparer.Instance);
+        private static readonly Dictionary<PinData, int> hiddenClientPinIndices = new(PinDataReferenceComparer.Instance);
         private static readonly Dictionary<long, float> nextAllowedRequestByPeer = new();
+        private static readonly MethodInfo listContainsIdMethod = AccessTools.DeclaredMethod(typeof(ZNet), "ListContainsId");
+        private static readonly object[] listContainsIdArguments = new object[2];
 
         private static ZRoutedRpc registeredRpcInstance;
         private static bool serverListDirty;
@@ -100,6 +164,7 @@ namespace AutoPinSigns
 
         private static bool clientHasSnapshot;
         private static bool clientAuthorityConfirmed;
+        private static AuthoritativePinTypes clientAuthoritativeTypes = AuthoritativePinTypes.None;
         private static long clientRevision = -1;
         private static float nextRequestAt;
         private static int clientRequestAttempts;
@@ -108,8 +173,10 @@ namespace AutoPinSigns
         private static bool lastAuthoritativeMode;
 
         private static Minimap projectionMinimap;
+        private static Minimap hiddenClientPinsMinimap;
         private static bool projectionDirty;
         private static bool isReconcilingProjection;
+        private static bool isSwappingMapDataPins;
         private static int lastObservedPinCount = -1;
         private static float nextProjectionAuditAt;
         private static float nextProjectionLogAt;
@@ -119,6 +186,14 @@ namespace AutoPinSigns
             ZNet.instance && (ZNet.instance.IsServer() ? IsAuthoritativeMode : IsEnabled && clientAuthorityConfirmed);
 
         internal static bool HasActiveAuthority => HasConfirmedAuthority;
+
+        private static AuthoritativePinTypes ControlledPinTypes =>
+            ZNet.instance && ZNet.instance.IsServer()
+                ? GetConfiguredAuthoritativePinTypes()
+                : clientAuthoritativeTypes;
+
+        internal static bool ControlsPinType(PinType pinType) =>
+            HasConfirmedAuthority && IsPinTypeEnabled(ControlledPinTypes, pinType);
 
         internal static void Tick()
         {
@@ -173,14 +248,39 @@ namespace AutoPinSigns
             ApplyModeState();
         }
 
+        internal static void OnAuthoritativeSettingsChanged()
+        {
+            if (!ZNet.instance)
+                return;
+
+            if (ZNet.instance.IsServer())
+            {
+                RemoveAppliedPins();
+                HideControlledClientPins(Minimap.instance);
+                LocalSignPins.RefreshAll();
+                serverModeBroadcastPending = true;
+                MarkProjectionDirty();
+                MarkDirty(immediate: true);
+                return;
+            }
+
+            if (clientAuthorityConfirmed)
+            {
+                clientHasSnapshot = false;
+                clientRequestAttempts = 0;
+                clientRequestLimitLogged = false;
+                nextRequestAt = Time.realtimeSinceStartup;
+            }
+        }
+
         private static void ApplyModeState()
         {
-            LocalSignPins.RefreshAll();
-
             if (ZNet.instance && ZNet.instance.IsServer())
             {
                 if (IsAuthoritativeMode)
                 {
+                    HideControlledClientPins(Minimap.instance);
+                    LocalSignPins.RefreshAll();
                     serverModeBroadcastPending = true;
                     initialProjectionCompleted = false;
                     MarkProjectionDirty();
@@ -196,6 +296,7 @@ namespace AutoPinSigns
                     serverModeBroadcastPending = true;
                     if (BroadcastSnapshot())
                         serverModeBroadcastPending = false;
+                    LocalSignPins.RefreshAll();
                 }
                 return;
             }
@@ -206,11 +307,13 @@ namespace AutoPinSigns
                 receivedPins.Clear();
                 clientHasSnapshot = false;
                 clientAuthorityConfirmed = false;
+                clientAuthoritativeTypes = AuthoritativePinTypes.None;
                 clientRevision = -1;
                 clientRequestAttempts = 0;
                 clientRequestLimitLogged = false;
                 initialProjectionCompleted = false;
                 ResetProjectionTracking();
+                LocalSignPins.RefreshAll();
                 return;
             }
 
@@ -230,6 +333,8 @@ namespace AutoPinSigns
                 MarkProjectionDirty();
                 MaintainAuthoritativeProjection(forceAudit: true);
             }
+
+            LocalSignPins.RefreshAll();
         }
 
         internal static void MarkDirty(bool immediate = false)
@@ -303,11 +408,11 @@ namespace AutoPinSigns
                 if (!IsAuthoritativeMode)
                     return "Auto Pin Signs: local sign discovery mode.";
 
-                return $"Auto Pin Signs: server authoritative mode, revision {serverRevision}, {authoritativePins.Count} pin(s), {appliedPins.Count} projected pin(s), {signZdos.Count} indexed sign ZDO(s).";
+                return $"Auto Pin Signs: server authoritative mode, revision {serverRevision}, controlled types {ControlledPinTypes}, {authoritativePins.Count} pin(s), {appliedPins.Count} projected pin(s), {hiddenClientPins.Count} hidden client pin(s), {signZdos.Count} indexed sign ZDO(s).";
             }
 
             string confirmation = clientAuthorityConfirmed ? "ready" : clientHasSnapshot ? "server mode inactive" : "pending";
-            return $"Auto Pin Signs: server authoritative probe {confirmation}, revision {clientRevision}, {receivedPins.Count} received pin(s), {appliedPins.Count} projected pin(s), request attempts {clientRequestAttempts}/{MaximumAutomaticRequestAttempts}.";
+            return $"Auto Pin Signs: server authoritative probe {confirmation}, revision {clientRevision}, controlled types {clientAuthoritativeTypes}, {receivedPins.Count} received pin(s), {appliedPins.Count} projected pin(s), {hiddenClientPins.Count} hidden client pin(s), request attempts {clientRequestAttempts}/{MaximumAutomaticRequestAttempts}.";
         }
 
         internal static void ResetSession()
@@ -317,6 +422,8 @@ namespace AutoPinSigns
             staleZdos.Clear();
             authoritativePins.Clear();
             rebuiltPins.Clear();
+            candidatePins.Clear();
+            mergedPinGroups.Clear();
             receivedPins.Clear();
             nextAllowedRequestByPeer.Clear();
             serverListDirty = false;
@@ -325,6 +432,7 @@ namespace AutoPinSigns
             serverRevision = 0;
             clientHasSnapshot = false;
             clientAuthorityConfirmed = false;
+            clientAuthoritativeTypes = AuthoritativePinTypes.None;
             clientRevision = -1;
             nextRequestAt = 0f;
             clientRequestAttempts = 0;
@@ -333,6 +441,11 @@ namespace AutoPinSigns
             lastAuthoritativeMode = false;
             initialProjectionCompleted = false;
             ResetProjectionTracking();
+            hiddenClientPins.Clear();
+            hiddenClientPinSet.Clear();
+            hiddenClientPinIndices.Clear();
+            hiddenClientPinsMinimap = null;
+            isSwappingMapDataPins = false;
         }
 
         private static void RegisterRpcs()
@@ -356,6 +469,7 @@ namespace AutoPinSigns
             ZPackage package = new();
             package.Write(ProtocolVersion);
             package.Write(clientRevision);
+            package.Write((int)clientAuthoritativeTypes);
 
             long serverPeerId = ZRoutedRpc.instance.GetServerPeerID();
             ZRoutedRpc.instance.InvokeRoutedRPC(serverPeerId, RequestRpc, package);
@@ -376,6 +490,7 @@ namespace AutoPinSigns
             {
                 int protocol = package.ReadInt();
                 long requestedRevision = package.ReadLong();
+                AuthoritativePinTypes requestedTypes = (AuthoritativePinTypes)package.ReadInt() & AuthoritativePinTypes.All;
                 if (protocol != ProtocolVersion)
                 {
                     LogWarning($"Ignored Auto Pin Signs request using unsupported protocol {protocol} from peer {sender}.");
@@ -384,7 +499,7 @@ namespace AutoPinSigns
 
                 bool changedAndBroadcast = IsAuthoritativeMode && serverListDirty && RebuildServerList(broadcastIfChanged: true);
                 if (!changedAndBroadcast)
-                    SendSnapshot(sender, requestedRevision);
+                    SendSnapshot(sender, requestedRevision, requestedTypes);
             }
             catch (Exception exception)
             {
@@ -392,9 +507,9 @@ namespace AutoPinSigns
             }
         }
 
-        private static void SendSnapshot(long target, long requestedRevision)
+        private static void SendSnapshot(long target, long requestedRevision, AuthoritativePinTypes requestedTypes)
         {
-            ZPackage package = CreateSnapshotPackage(requestedRevision);
+            ZPackage package = CreateSnapshotPackage(requestedRevision, requestedTypes);
             ZRoutedRpc.instance.InvokeRoutedRPC(target, ResponseRpc, package);
         }
 
@@ -403,19 +518,24 @@ namespace AutoPinSigns
             if (ZRoutedRpc.instance == null || !ZNet.instance || !ZNet.instance.IsServer())
                 return false;
 
-            ZPackage package = CreateSnapshotPackage(requestedRevision: -1);
+            ZPackage package = CreateSnapshotPackage(requestedRevision: -1, requestedTypes: AuthoritativePinTypes.None);
             ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, ResponseRpc, package);
             return true;
         }
 
-        private static ZPackage CreateSnapshotPackage(long requestedRevision)
+        private static ZPackage CreateSnapshotPackage(long requestedRevision, AuthoritativePinTypes requestedTypes)
         {
             ZPackage package = new();
+            AuthoritativePinTypes currentTypes = IsAuthoritativeMode
+                ? GetConfiguredAuthoritativePinTypes()
+                : AuthoritativePinTypes.None;
+
             package.Write(ProtocolVersion);
             package.Write(IsAuthoritativeMode);
+            package.Write((int)currentTypes);
             package.Write(serverRevision);
 
-            bool includePins = IsAuthoritativeMode && requestedRevision != serverRevision;
+            bool includePins = IsAuthoritativeMode && (requestedRevision != serverRevision || requestedTypes != currentTypes);
             package.Write(includePins);
             if (!includePins)
                 return package;
@@ -427,6 +547,7 @@ namespace AutoPinSigns
                 package.Write(pin.Position);
                 package.Write((int)pin.Type);
                 package.Write(pin.Name);
+                package.Write(pin.Checked);
                 package.Write(pin.Creator);
                 package.Write(pin.Author);
             }
@@ -449,6 +570,7 @@ namespace AutoPinSigns
                 }
 
                 bool enabled = package.ReadBool();
+                AuthoritativePinTypes authoritativeTypes = (AuthoritativePinTypes)package.ReadInt() & AuthoritativePinTypes.All;
                 long revision = package.ReadLong();
                 bool includesPins = package.ReadBool();
 
@@ -458,6 +580,7 @@ namespace AutoPinSigns
                     receivedPins.Clear();
                     clientHasSnapshot = true;
                     clientAuthorityConfirmed = false;
+                    clientAuthoritativeTypes = AuthoritativePinTypes.None;
                     clientRevision = revision;
                     initialProjectionCompleted = false;
                     ResetProjectionTracking();
@@ -465,6 +588,13 @@ namespace AutoPinSigns
                     clientRequestLimitLogged = false;
                     LocalSignPins.RefreshAll();
                     return;
+                }
+
+                bool controlledTypesChanged = clientAuthorityConfirmed && clientAuthoritativeTypes != (authoritativeTypes & AuthoritativePinTypes.All);
+                if (controlledTypesChanged)
+                {
+                    RemoveAppliedPins();
+                    initialProjectionCompleted = false;
                 }
 
                 if (includesPins)
@@ -484,16 +614,18 @@ namespace AutoPinSigns
                         Vector3 position = package.ReadVector3();
                         PinType type = (PinType)package.ReadInt();
                         string name = package.ReadString();
+                        bool isChecked = package.ReadBool();
                         long creator = package.ReadLong();
                         string author = package.ReadString();
 
-                        if (IsUserPinType(type))
-                            receivedPins.Add(new ServerPin(position, type, name, creator, author));
+                        if (IsPinTypeEnabled(authoritativeTypes, type))
+                            receivedPins.Add(new ServerPin(position, type, name, isChecked, creator, author));
                     }
                 }
 
                 bool newlyConfirmed = !clientAuthorityConfirmed;
                 clientRevision = revision;
+                clientAuthoritativeTypes = authoritativeTypes & AuthoritativePinTypes.All;
                 clientHasSnapshot = true;
                 clientAuthorityConfirmed = true;
                 if (newlyConfirmed)
@@ -502,8 +634,9 @@ namespace AutoPinSigns
                 clientRequestLimitLogged = false;
                 MarkProjectionDirty();
                 MaintainAuthoritativeProjection(forceAudit: true);
+                LocalSignPins.RefreshAll();
 
-                LogInfo($"Received authoritative server pins revision {clientRevision}; {receivedPins.Count} pin(s).");
+                LogInfo($"Received authoritative server pins revision {clientRevision}; {receivedPins.Count} pin(s), controlled types: {clientAuthoritativeTypes}.");
             }
             catch (Exception exception)
             {
@@ -536,7 +669,7 @@ namespace AutoPinSigns
 
         private static void MaintainAuthoritativeProjection(bool forceAudit = false)
         {
-            if (!HasConfirmedAuthority || !Minimap.instance || isReconcilingProjection)
+            if (!HasConfirmedAuthority || !Minimap.instance || isReconcilingProjection || isSwappingMapDataPins)
                 return;
 
             Minimap minimap = Minimap.instance;
@@ -545,6 +678,13 @@ namespace AutoPinSigns
                 projectionMinimap = minimap;
                 appliedPins.Clear();
                 appliedPinSet.Clear();
+                if (hiddenClientPinsMinimap && !ReferenceEquals(hiddenClientPinsMinimap, minimap))
+                {
+                    hiddenClientPins.Clear();
+                    hiddenClientPinSet.Clear();
+                    hiddenClientPinIndices.Clear();
+                    hiddenClientPinsMinimap = null;
+                }
                 lastObservedPinCount = -1;
                 MarkProjectionDirty();
             }
@@ -584,11 +724,11 @@ namespace AutoPinSigns
                 if (pin == null)
                     continue;
 
-                if (!IsUserPinType(pin.m_type))
+                if (!ControlsPinType(pin.m_type))
                     continue;
 
-                // In authoritative mode the five standard user icon types are a projection
-                // of the server snapshot. Any foreign pin using one of those types is stale.
+                // Controlled standard user icon types are a projection of the server snapshot.
+                // Any foreign pin using one of those types is stale.
                 if (!appliedPinSet.Contains(pin))
                     return false;
 
@@ -606,6 +746,7 @@ namespace AutoPinSigns
                     applied.m_save ||
                     applied.m_type != expected.Type ||
                     applied.m_name != expected.Name ||
+                    applied.m_checked != expected.Checked ||
                     applied.m_pos != expected.Position)
                 {
                     return false;
@@ -615,24 +756,192 @@ namespace AutoPinSigns
             return true;
         }
 
+        private static int HideControlledClientPins(Minimap minimap, bool replaceSnapshot = false)
+        {
+            if (!minimap)
+                return 0;
+
+            if (replaceSnapshot || !ReferenceEquals(hiddenClientPinsMinimap, minimap))
+            {
+                hiddenClientPins.Clear();
+                hiddenClientPinSet.Clear();
+                hiddenClientPinIndices.Clear();
+                hiddenClientPinsMinimap = minimap;
+            }
+
+            int hiddenCount = 0;
+            List<PinData> mapPins = minimap.m_pins;
+            for (int i = 0; i < mapPins.Count; ++i)
+            {
+                PinData pin = mapPins[i];
+                if (pin == null || !pin.m_save || !ControlsPinType(pin.m_type) || appliedPinSet.Contains(pin))
+                    continue;
+
+                if (hiddenClientPinSet.Add(pin))
+                {
+                    hiddenClientPins.Add(pin);
+                    hiddenClientPinIndices[pin] = i;
+                    ++hiddenCount;
+                }
+            }
+
+            for (int i = mapPins.Count - 1; i >= 0; --i)
+            {
+                PinData pin = mapPins[i];
+                if (pin == null || !hiddenClientPinSet.Contains(pin))
+                    continue;
+
+                minimap.RemovePin(pin);
+            }
+
+            return hiddenCount;
+        }
+
+        private static void RestoreHiddenClientPins(Minimap minimap)
+        {
+            if (!minimap || !ReferenceEquals(hiddenClientPinsMinimap, minimap))
+                return;
+
+            List<PinData> mapPins = minimap.m_pins;
+            for (int i = 0; i < hiddenClientPins.Count; ++i)
+            {
+                PinData pin = hiddenClientPins[i];
+                if (pin != null && !mapPins.Contains(pin))
+                {
+                    int index = hiddenClientPinIndices.TryGetValue(pin, out int originalIndex)
+                        ? Mathf.Clamp(originalIndex, 0, mapPins.Count)
+                        : mapPins.Count;
+                    mapPins.Insert(index, pin);
+                }
+            }
+
+            hiddenClientPins.Clear();
+            hiddenClientPinSet.Clear();
+            hiddenClientPinIndices.Clear();
+            hiddenClientPinsMinimap = null;
+        }
+
+        private static MapDataPinSwapState SwapAuthoritativePinsForClientPins(Minimap minimap)
+        {
+            if (!minimap || isSwappingMapDataPins)
+                return null;
+
+            if (hiddenClientPinsMinimap && !ReferenceEquals(hiddenClientPinsMinimap, minimap))
+            {
+                hiddenClientPins.Clear();
+                hiddenClientPinSet.Clear();
+                hiddenClientPinIndices.Clear();
+                hiddenClientPinsMinimap = null;
+            }
+
+            MapDataPinSwapState state = null;
+            try
+            {
+                if (HasConfirmedAuthority)
+                {
+                    isReconcilingProjection = true;
+                    try
+                    {
+                        HideControlledClientPins(minimap);
+                    }
+                    finally
+                    {
+                        isReconcilingProjection = false;
+                    }
+                }
+
+                if (appliedPins.Count == 0 && hiddenClientPins.Count == 0)
+                    return null;
+
+                state = new MapDataPinSwapState();
+                isSwappingMapDataPins = true;
+
+                List<PinData> mapPins = minimap.m_pins;
+                for (int i = mapPins.Count - 1; i >= 0; --i)
+                {
+                    PinData pin = mapPins[i];
+                    if (pin == null || !appliedPinSet.Contains(pin))
+                        continue;
+
+                    state.RemovedAuthoritativePins.Insert(0, pin);
+                    mapPins.RemoveAt(i);
+                }
+
+                for (int i = 0; i < hiddenClientPins.Count; ++i)
+                {
+                    PinData pin = hiddenClientPins[i];
+                    if (pin == null || mapPins.Contains(pin))
+                        continue;
+
+                    int index = hiddenClientPinIndices.TryGetValue(pin, out int originalIndex)
+                        ? Mathf.Clamp(originalIndex, 0, mapPins.Count)
+                        : mapPins.Count;
+                    mapPins.Insert(index, pin);
+                    state.AddedClientPins.Add(pin);
+                }
+
+                return state;
+            }
+            catch (Exception exception)
+            {
+                RestoreAuthoritativePinsAfterMapData(minimap, state);
+                RestoreHiddenClientPins(minimap);
+                MarkProjectionDirty();
+                LogWarning($"Failed to prepare client pins for player profile serialization: {exception.Message}");
+                return null;
+            }
+        }
+
+        private static void RestoreAuthoritativePinsAfterMapData(Minimap minimap, MapDataPinSwapState state)
+        {
+            if (state == null)
+                return;
+
+            try
+            {
+                if (!minimap)
+                    return;
+
+                List<PinData> mapPins = minimap.m_pins;
+                for (int i = state.AddedClientPins.Count - 1; i >= 0; --i)
+                    mapPins.Remove(state.AddedClientPins[i]);
+
+                for (int i = 0; i < state.RemovedAuthoritativePins.Count; ++i)
+                {
+                    PinData pin = state.RemovedAuthoritativePins[i];
+                    if (pin != null && !mapPins.Contains(pin))
+                        mapPins.Add(pin);
+                }
+
+                lastObservedPinCount = mapPins.Count;
+            }
+            catch (Exception exception)
+            {
+                MarkProjectionDirty();
+                LogWarning($"Failed to restore authoritative pins after player profile serialization: {exception.Message}");
+            }
+            finally
+            {
+                isSwappingMapDataPins = false;
+            }
+        }
+
         private static void RebuildProjection(Minimap minimap, List<ServerPin> source)
         {
             isReconcilingProjection = true;
             bool firstProjection = !initialProjectionCompleted;
             bool completed = false;
-            int removedSavedPins = 0;
+            int hiddenSavedPins = 0;
 
             try
             {
+                hiddenSavedPins = HideControlledClientPins(minimap);
                 List<PinData> mapPins = minimap.m_pins;
                 for (int i = mapPins.Count - 1; i >= 0; --i)
                 {
                     PinData pin = mapPins[i];
-                    if (pin == null || !IsUserPinType(pin.m_type))
+                    if (pin == null || !ControlsPinType(pin.m_type))
                         continue;
-
-                    if (pin.m_save && !appliedPinSet.Contains(pin))
-                        ++removedSavedPins;
 
                     minimap.RemovePin(pin);
                 }
@@ -648,7 +957,7 @@ namespace AutoPinSigns
                         pin.Type,
                         pin.Name,
                         save: false,
-                        isChecked: false,
+                        isChecked: pin.Checked,
                         pin.Creator,
                         ResolveAuthor(pin.Author));
 
@@ -678,20 +987,20 @@ namespace AutoPinSigns
             }
 
             if (completed)
-                ReportRemovedSavedPins(removedSavedPins, firstProjection);
+                ReportHiddenSavedPins(hiddenSavedPins, firstProjection);
         }
 
-        private static void ReportRemovedSavedPins(int removedCount, bool firstProjection)
+        private static void ReportHiddenSavedPins(int hiddenCount, bool firstProjection)
         {
-            if (removedCount <= 0)
+            if (hiddenCount <= 0)
                 return;
 
-            string message = $"Server authoritative pins removed {removedCount} saved client user pin(s).";
+            string message = $"Server authoritative pins temporarily hid {hiddenCount} saved client user pin(s).";
             if (firstProjection)
             {
-                string warning = message + " Existing client pins are not restored by the mod.";
-                LogWarning(warning);
-                Player.m_localPlayer?.Message(MessageHud.MessageType.TopLeft, warning, 0, null);
+                string notice = message + " They remain stored in the player profile and return when server authority or the corresponding controlled type is inactive.";
+                LogInfo(notice);
+                Player.m_localPlayer?.Message(MessageHud.MessageType.TopLeft, notice, 0, null);
                 nextProjectionLogAt = Time.realtimeSinceStartup + ProjectionLogIntervalSeconds;
                 return;
             }
@@ -699,7 +1008,7 @@ namespace AutoPinSigns
             if (Time.realtimeSinceStartup >= nextProjectionLogAt)
             {
                 nextProjectionLogAt = Time.realtimeSinceStartup + ProjectionLogIntervalSeconds;
-                LogInfo(message + " The authoritative projection was restored.");
+                LogInfo(message + " The authoritative projection was restored without changing profile data.");
             }
         }
 
@@ -715,7 +1024,7 @@ namespace AutoPinSigns
             return string.IsNullOrEmpty(resolvedAuthor) ? PlatformUserID.None : new PlatformUserID(resolvedAuthor);
         }
 
-        private static void RemoveAppliedPins()
+        private static void RemoveAppliedPins(bool restoreClientPins = true)
         {
             Minimap minimap = Minimap.instance;
             if (minimap)
@@ -738,6 +1047,8 @@ namespace AutoPinSigns
 
             appliedPins.Clear();
             appliedPinSet.Clear();
+            if (restoreClientPins)
+                RestoreHiddenClientPins(minimap);
             lastObservedPinCount = minimap ? minimap.m_pins.Count : -1;
         }
 
@@ -745,7 +1056,15 @@ namespace AutoPinSigns
         {
             serverListDirty = false;
             rebuiltPins.Clear();
+            candidatePins.Clear();
+            mergedPinGroups.Clear();
             staleZdos.Clear();
+
+            AuthoritativePinTypes controlledTypes = GetConfiguredAuthoritativePinTypes();
+            bool administratorsOnly = serverAuthoritativeAdminsOnly?.Value == true;
+            float mergeDistance = Mathf.Max(0f, serverAuthoritativeMergeDistance?.Value ?? 0f);
+            int ignoredNonAdminPins = 0;
+            int mergedPins = 0;
 
             foreach (ZDO zdo in signZdos)
             {
@@ -755,20 +1074,59 @@ namespace AutoPinSigns
                     continue;
                 }
 
-                if (!SignPinParser.TryParse(zdo.GetString(ZDOVars.s_text), out SignPinMatch match))
+                string rawText = zdo.GetString(ZDOVars.s_text);
+                if (!SignPinMetadata.TryGetPinState(zdo, rawText, allowMetadataWrite: true, out SignPinMatch match, out bool isChecked) ||
+                    !IsPinTypeEnabled(controlledTypes, match.Type))
+                {
                     continue;
+                }
 
-                rebuiltPins.Add(new ServerPin(
+                string author = zdo.GetString(ZDOVars.s_author);
+                if (administratorsOnly && !IsAdministratorAuthor(author))
+                {
+                    ++ignoredNonAdminPins;
+                    continue;
+                }
+
+                ServerPin pin = new(
                     zdo.GetPosition(),
                     match.Type,
                     match.Name,
+                    isChecked,
                     zdo.GetLong(ZDOVars.s_creator, 0L),
-                    zdo.GetString(ZDOVars.s_author)));
+                    author);
+                candidatePins.Add(new ServerPinCandidate(zdo.m_uid.ToString(), pin));
             }
 
             for (int i = 0; i < staleZdos.Count; ++i)
                 signZdos.Remove(staleZdos[i]);
             staleZdos.Clear();
+
+            candidatePins.Sort(ServerPinCandidateComparer.Instance);
+            for (int i = 0; i < candidatePins.Count; ++i)
+            {
+                ServerPin pin = candidatePins[i].Pin;
+                if (mergeDistance > 0f && IsMergedDuplicate(pin, mergeDistance))
+                {
+                    ++mergedPins;
+                    continue;
+                }
+
+                rebuiltPins.Add(pin);
+                if (mergeDistance > 0f)
+                {
+                    PinIdentity identity = new(pin.Type, pin.Name);
+                    if (!mergedPinGroups.TryGetValue(identity, out List<ServerPin> group))
+                    {
+                        group = new List<ServerPin>();
+                        mergedPinGroups.Add(identity, group);
+                    }
+                    group.Add(pin);
+                }
+            }
+
+            candidatePins.Clear();
+            mergedPinGroups.Clear();
 
             rebuiltPins.Sort(ServerPinComparer.Instance);
             if (rebuiltPins.Count > MaximumReceivedPins)
@@ -787,7 +1145,10 @@ namespace AutoPinSigns
                 MarkProjectionDirty();
                 MaintainAuthoritativeProjection(forceAudit: true);
 
-                LogInfo($"Authoritative sign pin list changed to revision {serverRevision}; {authoritativePins.Count} pin(s) from {signZdos.Count} indexed sign ZDO(s).");
+                LogInfo(
+                    $"Authoritative sign pin list changed to revision {serverRevision}; {authoritativePins.Count} pin(s) " +
+                    $"from {signZdos.Count} indexed sign ZDO(s), {mergedPins} merged duplicate(s), " +
+                    $"{ignoredNonAdminPins} non-administrator sign(s) ignored.");
             }
 
             bool shouldBroadcast = broadcastIfChanged && IsAuthoritativeMode && (changed || serverModeBroadcastPending);
@@ -796,6 +1157,51 @@ namespace AutoPinSigns
                 serverModeBroadcastPending = false;
 
             return broadcasted;
+        }
+
+        private static bool IsMergedDuplicate(ServerPin candidate, float mergeDistance)
+        {
+            PinIdentity identity = new(candidate.Type, candidate.Name);
+            if (!mergedPinGroups.TryGetValue(identity, out List<ServerPin> retainedPins))
+                return false;
+
+            for (int i = 0; i < retainedPins.Count; ++i)
+            {
+                if (Utils.DistanceXZ(candidate.Position, retainedPins[i].Position) <= mergeDistance)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsAdministratorAuthor(string author)
+        {
+            if (string.IsNullOrEmpty(author) || !ZNet.instance)
+                return false;
+
+            if (author == "host")
+                return true;
+
+            string resolvedAuthor = author;
+            RelationsManager.UpdateAuthorIfHost(author, ref resolvedAuthor);
+            if (string.IsNullOrEmpty(resolvedAuthor) || ZNet.instance.m_adminList == null)
+                return false;
+
+            if (listContainsIdMethod != null)
+            {
+                try
+                {
+                    listContainsIdArguments[0] = ZNet.instance.m_adminList;
+                    listContainsIdArguments[1] = resolvedAuthor;
+                    return (bool)listContainsIdMethod.Invoke(ZNet.instance, listContainsIdArguments);
+                }
+                catch
+                {
+                    // Fall back to the legacy direct lookup below.
+                }
+            }
+
+            return ZNet.instance.m_adminList.Contains(resolvedAuthor);
         }
 
         private static bool ListsEqual(List<ServerPin> left, List<ServerPin> right)
@@ -921,8 +1327,13 @@ namespace AutoPinSigns
         {
             private static void Postfix(ZDO __instance)
             {
-                if (ZNet.instance && ZNet.instance.IsServer() && TryTrackSignZdo(__instance))
+                if (!SignPinMetadata.IsWritingCacheMetadata &&
+                    ZNet.instance &&
+                    ZNet.instance.IsServer() &&
+                    TryTrackSignZdo(__instance))
+                {
                     MarkDirty();
+                }
             }
         }
 
@@ -931,7 +1342,7 @@ namespace AutoPinSigns
         {
             private static void Postfix(PinType type, PinData __result)
             {
-                if (isReconcilingProjection || !HasConfirmedAuthority || __result == null || !IsUserPinType(type))
+                if (isReconcilingProjection || !HasConfirmedAuthority || __result == null || !ControlsPinType(type))
                     return;
 
                 MarkProjectionDirty();
@@ -946,7 +1357,7 @@ namespace AutoPinSigns
                 if (isReconcilingProjection || !HasConfirmedAuthority || pin == null)
                     return;
 
-                if (IsUserPinType(pin.m_type))
+                if (ControlsPinType(pin.m_type))
                     MarkProjectionDirty();
             }
         }
@@ -954,10 +1365,25 @@ namespace AutoPinSigns
         [HarmonyPatch(typeof(Minimap), nameof(Minimap.ShowPinNameInput))]
         private static class Minimap_ShowPinNameInput_PreventClientPinCreation
         {
-            private static bool Prefix() => !HasConfirmedAuthority;
+            private static bool Prefix(Minimap __instance) => !ControlsPinType(__instance.m_selectedType);
         }
 
-        [HarmonyPatch(typeof(Minimap), "UpdatePins")]
+        [HarmonyPatch(typeof(Minimap), nameof(Minimap.GetMapData), new Type[] { })]
+        private static class Minimap_GetMapData_PreserveClientPins
+        {
+            [HarmonyPriority(Priority.First)]
+            private static void Prefix(Minimap __instance, out MapDataPinSwapState __state) =>
+                __state = SwapAuthoritativePinsForClientPins(__instance);
+
+            [HarmonyPriority(Priority.Last)]
+            private static Exception Finalizer(Minimap __instance, MapDataPinSwapState __state, Exception __exception)
+            {
+                RestoreAuthoritativePinsAfterMapData(__instance, __state);
+                return __exception;
+            }
+        }
+
+        [HarmonyPatch(typeof(Minimap), nameof(Minimap.UpdatePins))]
         private static class Minimap_UpdatePins_MaintainProjection
         {
             [HarmonyPriority(Priority.First)]
@@ -967,10 +1393,11 @@ namespace AutoPinSigns
         [HarmonyPatch(typeof(Minimap), nameof(Minimap.SetMapData), new[] { typeof(byte[]) })]
         private static class Minimap_SetMapData_ReconcileServerPins
         {
-            private static Exception Finalizer(Exception __exception)
+            private static Exception Finalizer(Minimap __instance, Exception __exception)
             {
-                if (HasConfirmedAuthority)
+                if (__exception == null && HasConfirmedAuthority)
                 {
+                    HideControlledClientPins(__instance, replaceSnapshot: true);
                     MarkProjectionDirty();
                     MaintainAuthoritativeProjection(forceAudit: true);
                 }
@@ -979,13 +1406,14 @@ namespace AutoPinSigns
             }
         }
 
-        [HarmonyPatch(typeof(Minimap), "AddSharedMapData")]
+        [HarmonyPatch(typeof(Minimap), nameof(Minimap.AddSharedMapData))]
         private static class Minimap_AddSharedMapData_ReconcileServerPins
         {
-            private static Exception Finalizer(Exception __exception)
+            private static Exception Finalizer(Minimap __instance, Exception __exception)
             {
-                if (HasConfirmedAuthority)
+                if (__exception == null && HasConfirmedAuthority)
                 {
+                    HideControlledClientPins(__instance);
                     MarkProjectionDirty();
                     MaintainAuthoritativeProjection(forceAudit: true);
                 }

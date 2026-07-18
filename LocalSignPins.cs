@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using static AutoPinSigns.AutoPinSigns;
@@ -8,6 +9,8 @@ namespace AutoPinSigns
 {
     internal static class LocalSignPins
     {
+        private const float LoadedSignAuditIntervalSeconds = 0.5f;
+
         private sealed class SignState
         {
             internal readonly Sign Sign;
@@ -17,6 +20,9 @@ namespace AutoPinSigns
             internal string RawText = string.Empty;
             internal bool HasMatch;
             internal SignPinMatch Match;
+            internal bool IsChecked;
+            internal string VisibleText = string.Empty;
+            internal bool WasEnabled;
             internal PinData LocalPin;
 
             internal SignState(Sign sign)
@@ -35,32 +41,57 @@ namespace AutoPinSigns
                 if (zdo == null)
                     return;
 
-                RawText = zdo.GetString(ZDOVars.s_text);
-                HasMatch = SignPinParser.TryParse(RawText, out Match);
+                string rawText = zdo.GetString(ZDOVars.s_text);
+                bool hasMatch = SignPinMetadata.TryGetPinState(
+                    zdo,
+                    rawText,
+                    SignPinMetadata.CanWriteMetadata(Sign),
+                    out SignPinMatch match,
+                    out bool checkedState);
+                bool enabled = IsEnabled;
+                bool stateChanged =
+                    RawText != rawText ||
+                    HasMatch != hasMatch ||
+                    (hasMatch && (Match.Type != match.Type || Match.Name != match.Name)) ||
+                    IsChecked != checkedState ||
+                    WasEnabled != enabled;
+
+                RawText = rawText;
+                HasMatch = hasMatch;
+                Match = match;
+                IsChecked = checkedState;
+                WasEnabled = enabled;
+                if (stateChanged)
+                {
+                    VisibleText = enabled && hasMatch
+                        ? (checkedState ? "(x) " : string.Empty) + match.Name
+                        : rawText;
+                }
+
+                // Vanilla may refresh the sign widget without changing the ZDO.
+                // Reassert the cached presentation even when the parsed state is unchanged.
                 UpdateVisibleText();
                 UpdateLocalPin();
             }
 
-            internal void Refresh()
-            {
-                HasMatch = SignPinParser.TryParse(RawText, out Match);
-                UpdateVisibleText();
-                UpdateLocalPin();
-            }
+            internal void Refresh() => UpdateFromZdo();
+
+            internal string GetVisibleText() => VisibleText;
 
             internal void UpdateVisibleText()
             {
                 if (!Sign || Sign.m_textWidget == null)
                     return;
 
-                string visibleText = IsEnabled && HasMatch ? Match.Name : RawText;
+                string visibleText = GetVisibleText();
                 if (Sign.m_textWidget.text != visibleText)
                     Sign.m_textWidget.SetText(visibleText);
             }
 
             internal void UpdateLocalPin()
             {
-                if (!IsEnabled || ServerPinSync.HasActiveAuthority || !HasMatch || !Minimap.instance || !Sign)
+                bool controlledByServer = HasMatch && ServerPinSync.ControlsPinType(Match.Type);
+                if (!IsEnabled || controlledByServer || !HasMatch || !Minimap.instance || !Sign)
                 {
                     RemoveLocalPin();
                     return;
@@ -70,6 +101,15 @@ namespace AutoPinSigns
                 {
                     claimedLocalPins.Remove(LocalPin);
                     LocalPin = null;
+                }
+
+                if (LocalPin != null &&
+                    LocalPin.m_type == Match.Type &&
+                    LocalPin.m_name == Match.Name &&
+                    Utils.DistanceXZ(LocalPin.m_pos, Sign.transform.position) < 1f &&
+                    LocalPin.m_checked != IsChecked)
+                {
+                    LocalPin.m_checked = IsChecked;
                 }
 
                 if (LocalPin != null &&
@@ -83,16 +123,17 @@ namespace AutoPinSigns
                 LocalPin ??= FindExistingSavedPin(Sign.transform.position, Match);
                 if (LocalPin != null)
                 {
+                    LocalPin.m_checked = IsChecked;
                     claimedLocalPins.Add(LocalPin);
                     return;
                 }
 
-                LocalPin = Minimap.instance.AddPin(Sign.transform.position, Match.Type, Match.Name, save: true, isChecked: false);
+                LocalPin = Minimap.instance.AddPin(Sign.transform.position, Match.Type, Match.Name, save: true, isChecked: IsChecked);
                 if (LocalPin == null)
                     return;
 
                 claimedLocalPins.Add(LocalPin);
-                LogInfo($"Added local map pin from sign: \"{Match.Name}\" {LocalPin.m_icon?.name}");
+                LogInfo($"Added local map pin from sign: \"{Match.Name}\" {LocalPin.m_icon?.name}, checked: {IsChecked}.");
                 Player.m_localPlayer?.Message(MessageHud.MessageType.TopLeft, "$msg_pin_added: " + Match.Name, 0, LocalPin.m_icon);
             }
 
@@ -121,6 +162,7 @@ namespace AutoPinSigns
 
         private static Vector2i currentZone = new(int.MinValue, int.MinValue);
         private static Minimap observedMinimap;
+        private static float nextLoadedSignAuditAt;
 
         internal static void Register(Sign sign)
         {
@@ -167,6 +209,7 @@ namespace AutoPinSigns
             claimedLocalPins.Clear();
             currentZone = new Vector2i(int.MinValue, int.MinValue);
             observedMinimap = null;
+            nextLoadedSignAuditAt = 0f;
         }
 
         internal static void Tick()
@@ -178,12 +221,30 @@ namespace AutoPinSigns
                     RefreshAll();
             }
 
+            if (Time.realtimeSinceStartup >= nextLoadedSignAuditAt)
+            {
+                nextLoadedSignAuditAt = Time.realtimeSinceStartup + LoadedSignAuditIntervalSeconds;
+                RefreshLoadedSignStates();
+            }
+
             TickNearbyCleanup();
+        }
+
+        private static void RefreshLoadedSignStates()
+        {
+            refreshBuffer.Clear();
+            foreach (SignState state in signStates.Values)
+                refreshBuffer.Add(state);
+
+            for (int i = 0; i < refreshBuffer.Count; ++i)
+                refreshBuffer[i].UpdateFromZdo();
+
+            refreshBuffer.Clear();
         }
 
         private static void TickNearbyCleanup()
         {
-            if (!IsEnabled || ServerPinSync.HasActiveAuthority || removePinsWithoutSigns?.Value != true || !ZNet.instance || !Minimap.instance || !ZoneSystem.instance)
+            if (!IsEnabled || removePinsWithoutSigns?.Value != true || !ZNet.instance || !Minimap.instance || !ZoneSystem.instance)
                 return;
 
             Vector2i nextZone = ZoneSystem.GetZone(ZNet.instance.GetReferencePosition());
@@ -198,8 +259,14 @@ namespace AutoPinSigns
             for (int index = pins.Count - 1; index >= 0; --index)
             {
                 PinData pin = pins[index];
-                if (!pin.m_save || !IsUserPinType(pin.m_type) || ZoneSystem.GetZone(pin.m_pos) != currentZone || HasRelatedLoadedSign(pin))
+                if (!pin.m_save ||
+                    !IsUserPinType(pin.m_type) ||
+                    ServerPinSync.ControlsPinType(pin.m_type) ||
+                    ZoneSystem.GetZone(pin.m_pos) != currentZone ||
+                    HasRelatedLoadedSign(pin))
+                {
                     continue;
+                }
 
                 LogInfo($"Removed saved user pin without a matching sign: \"{pin.m_name}\" {pin.m_icon?.name} {pin.m_pos}");
                 Minimap.instance.RemovePin(pin);
@@ -234,11 +301,72 @@ namespace AutoPinSigns
             for (int i = 0; i < pins.Count; ++i)
             {
                 PinData pin = pins[i];
-                if (pin.m_save && !claimedLocalPins.Contains(pin) && pin.m_type == match.Type && pin.m_name == match.Name && Utils.DistanceXZ(position, pin.m_pos) < 1f)
+                if (pin.m_save &&
+                    !claimedLocalPins.Contains(pin) &&
+                    pin.m_type == match.Type &&
+                    pin.m_name == match.Name &&
+                    Utils.DistanceXZ(position, pin.m_pos) < 1f)
+                {
                     return pin;
+                }
             }
 
             return null;
+        }
+
+        private static bool TryGetPinnedState(Sign sign, out SignState state)
+        {
+            state = null;
+            if (!IsEnabled || !sign)
+                return false;
+
+            if (!signStates.TryGetValue(sign, out state))
+            {
+                Register(sign);
+                if (!signStates.TryGetValue(sign, out state))
+                    return false;
+            }
+            else
+            {
+                state.UpdateFromZdo();
+            }
+
+            return state.HasMatch;
+        }
+
+        private static string ReplaceHoverSignText(string hoverText, SignState state)
+        {
+            if (string.IsNullOrEmpty(hoverText) || state == null)
+                return hoverText;
+
+            string rawText = state.RawText ?? string.Empty;
+            string visibleText = state.GetVisibleText();
+            if (rawText.Length == 0 || rawText == visibleText)
+                return hoverText;
+
+            int textIndex = hoverText.IndexOf(rawText, StringComparison.Ordinal);
+            return textIndex < 0
+                ? hoverText
+                : hoverText.Remove(textIndex, rawText.Length).Insert(textIndex, visibleText);
+        }
+
+        private static bool TryToggleChecked(Sign sign, Humanoid user, SignState state)
+        {
+            if (allowCheckedPinStatus?.Value != true || !state.HasMatch)
+                return false;
+
+            if (!PrivateArea.CheckAccess(sign.transform.position))
+            {
+                user?.Message(MessageHud.MessageType.Center, "$piece_noaccess", 0, null);
+                return true;
+            }
+
+            if (!SignPinMetadata.SetChecked(sign, !state.IsChecked))
+                return true;
+
+            state.UpdateFromZdo();
+            LogInfo($"Set checked status for sign pin \"{state.Match.Name}\" to {state.IsChecked}.");
+            return true;
         }
 
         [HarmonyPatch(typeof(Sign), nameof(Sign.Awake))]
@@ -261,6 +389,53 @@ namespace AutoPinSigns
             {
                 if (IsEnabled && signStates.TryGetValue(__instance, out SignState state))
                     __result = state.RawText;
+            }
+        }
+
+        [HarmonyPatch(typeof(Sign), nameof(Sign.UpdateText))]
+        private static class Sign_UpdateText_ApplyVisiblePinText
+        {
+            [HarmonyPriority(Priority.Last)]
+            private static void Postfix(Sign __instance)
+            {
+                if (IsEnabled && signStates.TryGetValue(__instance, out SignState state))
+                    state.UpdateVisibleText();
+            }
+        }
+
+        [HarmonyPatch(typeof(Sign), nameof(Sign.GetHoverText))]
+        private static class Sign_GetHoverText_AddCheckedCommand
+        {
+            private static void Postfix(Sign __instance, ref string __result)
+            {
+                if (!TryGetPinnedState(__instance, out SignState state))
+                    return;
+
+                __result = ReplaceHoverSignText(__result, state);
+                if (allowCheckedPinStatus?.Value != true)
+                    return;
+
+                string alternateKey = ZInput.IsNonClassicFunctionality() && ZInput.IsGamepadActive()
+                    ? "$KEY_AltKeys"
+                    : "$KEY_AltPlace";
+                __result += Localization.instance.Localize(
+                    "\n[<color=yellow><b>" + alternateKey + " + $KEY_Use</b></color>] $hud_crossoffpin");
+            }
+        }
+
+        [HarmonyPatch(typeof(Sign), nameof(Sign.Interact), new[] { typeof(Humanoid), typeof(bool), typeof(bool) })]
+        private static class Sign_Interact_ToggleCheckedStatus
+        {
+            private static bool Prefix(Sign __instance, Humanoid character, bool hold, bool alt, bool __runOriginal, ref bool __result)
+            {
+                if (!__runOriginal)
+                    return true;
+
+                if (!alt || hold || allowCheckedPinStatus?.Value != true || !TryGetPinnedState(__instance, out SignState state))
+                    return true;
+
+                __result = TryToggleChecked(__instance, character, state);
+                return false;
             }
         }
 
@@ -290,13 +465,12 @@ namespace AutoPinSigns
             }
         }
 
-
         [HarmonyPatch(typeof(Minimap), nameof(Minimap.SetMapData), new[] { typeof(byte[]) })]
         private static class Minimap_SetMapData_RefreshLocalPins
         {
             private static void Postfix()
             {
-                if (IsEnabled && !ServerPinSync.HasActiveAuthority)
+                if (IsEnabled)
                     RefreshAll();
             }
         }

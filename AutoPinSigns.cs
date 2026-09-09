@@ -24,12 +24,12 @@ namespace AutoPinSigns
     }
 
     [BepInPlugin(pluginID, pluginName, pluginVersion)]
-    [BepInDependency("_shudnal.ConditionalConfigSync", BepInDependency.DependencyFlags.HardDependency)]
+    [BepInDependency("_shudnal.ConditionalConfigSync", "1.0.5")]
     public sealed class AutoPinSigns : BaseUnityPlugin
     {
         public const string pluginID = "shudnal.AutoPinSigns";
         public const string pluginName = "Auto Pin Signs";
-        public const string pluginVersion = "2.0.0";
+        public const string pluginVersion = "2.0.1";
 
         private static readonly Harmony harmony = new(pluginID);
 
@@ -252,8 +252,7 @@ namespace AutoPinSigns
         private ConfigEntry<T> ConfigEntry<T>(string group, string name, T defaultValue, ConfigDescription description, bool synchronizedSetting = true)
         {
             ConfigEntry<T> entry = Config.Bind(group, name, defaultValue, description);
-            SyncedConfigEntry<T> syncedEntry = configSync.AddConfigEntry(entry);
-            syncedEntry.SynchronizedConfig = synchronizedSetting;
+            configSync.AddConfigEntry(entry, ConfigSyncMode.Conditional, serverControlledByDefault: synchronizedSetting);
             return entry;
         }
 
@@ -341,6 +340,7 @@ namespace AutoPinSigns
                 onlyServer: false,
                 isSecret: false,
                 allowInDevBuild: false,
+                hideBehindDevCommands: false,
                 () => new List<string>
                 {
                     "clear [range] - remove saved standard user pins near the player (default range: 5)",

@@ -160,7 +160,7 @@ namespace AutoPinSigns
         private static readonly List<Piece> nearbyPieces = new();
         private static readonly HashSet<PinData> claimedLocalPins = new();
 
-        private static Vector2i currentZone = new(int.MinValue, int.MinValue);
+        private static Vector2s currentZone = new(int.MinValue, int.MinValue);
         private static Minimap observedMinimap;
         private static float nextLoadedSignAuditAt;
 
@@ -197,7 +197,7 @@ namespace AutoPinSigns
             refreshBuffer.Clear();
         }
 
-        internal static void InvalidateCleanupZone() => currentZone = new Vector2i(int.MinValue, int.MinValue);
+        internal static void InvalidateCleanupZone() => currentZone = new Vector2s(int.MinValue, int.MinValue);
 
         internal static void ClearStates()
         {
@@ -207,7 +207,7 @@ namespace AutoPinSigns
             refreshBuffer.Clear();
             nearbyPieces.Clear();
             claimedLocalPins.Clear();
-            currentZone = new Vector2i(int.MinValue, int.MinValue);
+            currentZone = new Vector2s(int.MinValue, int.MinValue);
             observedMinimap = null;
             nextLoadedSignAuditAt = 0f;
         }
@@ -247,7 +247,7 @@ namespace AutoPinSigns
             if (!IsEnabled || removePinsWithoutSigns?.Value != true || !ZNet.instance || !Minimap.instance || !ZoneSystem.instance)
                 return;
 
-            Vector2i nextZone = ZoneSystem.GetZone(ZNet.instance.GetReferencePosition());
+            Vector2s nextZone = ZoneSystem.GetZone(ZNet.instance.GetReferencePosition());
             if (nextZone == currentZone)
                 return;
 

@@ -98,7 +98,7 @@ Default prefixes:
 
 A prefix or suffix does not need to contain a word or include surrounding spaces. For example, configuring `:` as a prefix makes the sign text `: Boat` create a pin named `Boat`. The matched part is removed and whitespace around the remaining name is trimmed.
 
-Suffixes provide the same behavior where helper words or phrases naturally come after the pin name. For example, Russian can use the prefix `Тут`: `Тут Лодка` becomes `Лодка`. In English, `Here Boat` sounds awkward, so the suffix `here` can be used instead: `Boat here` becomes `Boat`. The matched suffix and surrounding whitespace are removed from the final pin name.
+Suffixes provide the same behavior where helper words or phrases naturally come after the pin name. For example, `Boat here` becomes `Boat` when `here` is configured as a suffix.
 
 If you want to use HTML tags as prefixes, disable `General -> Strip HTML tags from text` mod config. This is also useful for signs that use emoji, symbols or other values encoded through rich-text tags.
 
@@ -119,8 +119,12 @@ The best way to handle configs is [Configuration Manager](https://thunderstore.i
 
 Or [Official BepInEx Configuration Manager](https://valheim.thunderstore.io/package/Azumatt/Official_BepInEx_ConfigurationManager/).
 
-## Mirrors
-[Nexus](https://www.nexusmods.com/valheim/mods/2433) — legacy page. Current releases are published on Thunderstore. Questions can still be asked there, but Discord is the preferred support channel.
+## Dependencies
+
+- [BepInExPack Valheim 5.4.2350](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/)
+- [ConditionalConfigSync 1.0.5](https://thunderstore.io/c/valheim/p/shudnal/ConditionalConfigSync/)
+
+Install ConditionalConfigSync as a separate dependency; do not copy its DLLs into this mod's package.
 
 ## Donation
 [Buy Me a Coffee](https://buymeacoffee.com/shudnal)

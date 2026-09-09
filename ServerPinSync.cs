@@ -1,4 +1,4 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using Splatform;
 using System;
 using System.Collections.Generic;
@@ -1273,9 +1273,15 @@ namespace AutoPinSigns
             }
         }
 
-        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.Load))]
+        [HarmonyPatch]
         private static class ZDOMan_Load_IndexSigns
         {
+            private static IEnumerable<System.Reflection.MethodBase> TargetMethods()
+            {
+                yield return AccessTools.Method(typeof(ZDOMan), nameof(ZDOMan.Load));
+                yield return AccessTools.Method(typeof(ZDOMan), nameof(ZDOMan.LoadChunks));
+            }
+
             private static void Postfix()
             {
                 if (!ZNet.instance || !ZNet.instance.IsServer())

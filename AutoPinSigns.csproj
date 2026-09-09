@@ -2,6 +2,7 @@
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
+    <ReferencePath>D:\work\source\repos\Assemblies\stable\publicized_assemblies\;D:\work\source\repos\Assemblies\stable\;D:\work\source\repos\Assemblies\Harmony\;D:\work\source\repos\Assemblies\Managers\</ReferencePath>
     <LangVersion>10.0</LangVersion>
   </PropertyGroup>
   <PropertyGroup>
@@ -41,15 +42,18 @@
     </Reference>
     <Reference Include="assembly_utils, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_utils.dll</HintPath>
+      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_utils_publicized.dll</HintPath>
+      <HintPath Condition="Exists('..\Assemblies\stable\publicized_assemblies\assembly_utils.dll')">..\Assemblies\stable\publicized_assemblies\assembly_utils.dll</HintPath>
     </Reference>
     <Reference Include="assembly_guiutils, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_guiutils.dll</HintPath>
+      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_guiutils_publicized.dll</HintPath>
+      <HintPath Condition="Exists('..\Assemblies\stable\publicized_assemblies\assembly_guiutils.dll')">..\Assemblies\stable\publicized_assemblies\assembly_guiutils.dll</HintPath>
     </Reference>
     <Reference Include="assembly_valheim, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_valheim.dll</HintPath>
+      <HintPath>..\Assemblies\stable\publicized_assemblies\assembly_valheim_publicized.dll</HintPath>
+      <HintPath Condition="Exists('..\Assemblies\stable\publicized_assemblies\assembly_valheim.dll')">..\Assemblies\stable\publicized_assemblies\assembly_valheim.dll</HintPath>
     </Reference>
     <Reference Include="BepInEx">
       <HintPath>..\Assemblies\Harmony\BepInEx.dll</HintPath>
@@ -97,10 +101,10 @@
     <None Include=".gitignore" />
     <None Include="LICENSE.txt" />
     <None Include="README.md" />
-    <None Include="Thunderstore.targets" />
+    <None Include="ILRepack.targets" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Import Project="Thunderstore.targets" Condition="Exists('Thunderstore.targets')" />
+  <Import Project="ILRepack.targets" Condition="Exists('ILRepack.targets')" />
   <PropertyGroup>
     <PostBuildEvent>
     </PostBuildEvent>

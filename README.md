@@ -121,3 +121,16 @@ If you want to use HTML tags as prefixes, disable `General -> Strip HTML tags fr
 - `autopinsigns clear [range]` — removes saved standard user pins near the player. Default range: 5 meters. Server-controlled types are skipped.
 - `autopinsigns status` — prints the active mode, revision, controlled types and pin counts.
 - `autopinsigns resync` — rebuilds the server list or requests the current server snapshot.
+
+## Dependencies
+
+- [BepInExPack Valheim 5.4.2350](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/)
+- [ConditionalConfigSync 1.0.5](https://thunderstore.io/c/valheim/p/shudnal/ConditionalConfigSync/)
+
+Install ConditionalConfigSync as a separate dependency; do not copy its DLLs into this mod's package.
+
+## Donation
+[Buy Me a Coffee](https://buymeacoffee.com/shudnal)
+
+## Discord
+[Join server](https://discord.gg/e3UtQB8GFK)

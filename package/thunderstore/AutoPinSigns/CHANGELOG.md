@@ -1,3 +1,8 @@
+# 2.0.1
+* Updated for the Valheim 1.0.7 release.
+* Updated required dependencies to BepInExPack Valheim 5.4.2350 and ConditionalConfigSync 1.0.5.
+* Restore the server sign index when loading worlds saved in the new chunk format.
+
 # 2.0.0
 * new feature: Sign Suffixes. The same as Sign Prefixes but useful for languages with different word orders.
 * new mode: Server Authoritative Pins. The server maintains one shared pin list from matching signs throughout the world and updates connected clients in real time. Pins appear when another player places or edits a pinned sign, without opening the map, using a cartography table, visiting the sign or loading its area.

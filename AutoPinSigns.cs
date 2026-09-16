@@ -2,7 +2,7 @@
 using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using HarmonyLib;
-using ConditionalConfigSync;
+using ServerSync;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -24,7 +24,6 @@ namespace AutoPinSigns
     }
 
     [BepInPlugin(pluginID, pluginName, pluginVersion)]
-    [BepInDependency("_shudnal.ConditionalConfigSync", "1.0.5")]
     public sealed class AutoPinSigns : BaseUnityPlugin
     {
         public const string pluginID = "shudnal.AutoPinSigns";
@@ -33,12 +32,7 @@ namespace AutoPinSigns
 
         private static readonly Harmony harmony = new(pluginID);
 
-        internal static readonly ConfigSync configSync = new(pluginID)
-        {
-            DisplayName = pluginName,
-            CurrentVersion = pluginVersion,
-            MinimumRequiredVersion = pluginVersion
-        };
+        internal static readonly ConfigSync configSync = new ConfigSync(pluginID) { DisplayName = pluginName, CurrentVersion = pluginVersion, MinimumRequiredVersion = pluginVersion };
 
         internal static ConfigEntry<bool> modEnabled;
         internal static ConfigEntry<bool> configLocked;
@@ -252,7 +246,8 @@ namespace AutoPinSigns
         private ConfigEntry<T> ConfigEntry<T>(string group, string name, T defaultValue, ConfigDescription description, bool synchronizedSetting = true)
         {
             ConfigEntry<T> entry = Config.Bind(group, name, defaultValue, description);
-            configSync.AddConfigEntry(entry, ConfigSyncMode.Conditional, serverControlledByDefault: synchronizedSetting);
+            SyncedConfigEntry<T> syncedEntry = configSync.AddConfigEntry(entry);
+            syncedEntry.SynchronizedConfig = synchronizedSetting;
             return entry;
         }
 
